@@ -1,0 +1,72 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &3736618215219695993
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6058914168534487955}
+  - component: {fileID: 6824764930686110333}
+  - component: {fileID: 7010204889071947589}
+  m_Layer: 10
+  m_Name: Fungus
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6058914168534487955
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3736618215219695993}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: -0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &6824764930686110333
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3736618215219695993}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4680adaae7bfbef4cafeaac04a8be242, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TagObjManager
+  tags:
+  - {fileID: 11400000, guid: 54946a146690be147a6462ef83a26ff2, type: 2}
+--- !u!114 &7010204889071947589
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3736618215219695993}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f7ed830a779995f4bb9abf193d2ca27c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::FungusPropagator
+  fungusDensity: 0.2
+  maxPropagationPoints: 250
+  fungusObjects: []
+  fungusGrowTime: 1
+  instantiateOverlap: 0.1
+  perPointGrowTimeNoiseRange: 1.005
+  perlinNoiseScale: 1
+  perlinSeed: 12345
+  tagToAdd: {fileID: 11400000, guid: d394543cee94b4a4297f02fc69881550, type: 2}
+  fungusParticle: {fileID: 1460819391766487465, guid: ceeec9d7554309a4b888a1a536a56dc5, type: 3}
+  alignParticleToSourceRotation: 1

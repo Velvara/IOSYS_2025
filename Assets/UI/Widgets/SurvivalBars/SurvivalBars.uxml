@@ -1,0 +1,10 @@
+<ui:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <Style src="project://database/Assets/UI/Widgets/SurvivalBars/SurvivalBars.uss?fileID=7433441132597879392&amp;guid=16d40a0a7b6d79544839663dc06622f5&amp;type=3#SurvivalBars"/>
+    <ui:VisualElement name="SurvivalBars" style="width: 250px; height: 250px; align-items: center; justify-content: center; align-self: center; align-content: center; right: 2%; bottom: 0%;">
+        <ui:VisualElement name="bars-container" style="width: 100%; height: 100%; flex-basis: auto; flex-direction: column;">
+            <StarterAssets.RadialBar name="stamina-bar" ring-thickness="20" penalty-value="-0.02" style="position: absolute; top: 0%; left: 0%; width: 60%; height: 60%; min-width: auto; min-height: auto; max-width: initial; max-height: initial; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0; background-size: 70% 70%; right: auto;"/>
+            <StarterAssets.RadialBar name="hunger-bar" ring-thickness="13" style="position: absolute; top: 52%; left: 50%; width: 33%; min-width: auto; min-height: auto; max-width: none; max-height: none; aspect-ratio: 1; height: 33%; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0; background-size: 55% 55%;"/>
+            <StarterAssets.RadialBar name="thirst-bar" ring-thickness="13" style="position: absolute; top: 16%; left: 67%; min-width: auto; min-height: auto; max-height: none; max-width: none; aspect-ratio: 1; height: 33%; width: 33%; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0; background-size: 55% 55%;"/>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"Assets/_Project/Systems/Time\")",
+      "Bash(mv Assets/Scripts/TimeManager.cs Assets/Scripts/TimeManager.cs.meta \"Assets/_Project/Systems/Time/\")",
+      "Bash(mkdir -p \"Assets/_Project/Powers/Flora\" \"Assets/_Project/Powers/Fungi\" \"Assets/_Project/Powers/Destruction\" \"Assets/_Project/Powers/Throwing\" \"Assets/_Project/Powers/FX\")",
+      "Bash(mv Assets/Scripts/TrunkGenerator.cs Assets/Scripts/TrunkGenerator.cs.meta Assets/Scripts/TreeTrunkMeshGenerator.cs Assets/Scripts/TreeTrunkMeshGenerator.cs.meta Assets/Scripts/TrunkPiece.cs Assets/Scripts/TrunkPiece.cs.meta \"Assets/_Project/Powers/Flora/\")",
+      "Bash(mv Assets/Scripts/FungusPool.cs Assets/Scripts/FungusPool.cs.meta Assets/Scripts/FungusPropagator.cs Assets/Scripts/FungusPropagator.cs.meta \"Assets/_Project/Powers/Fungi/\")",
+      "Bash(grep \"\\\\.cs$\")"
+    ]
+  }
+}

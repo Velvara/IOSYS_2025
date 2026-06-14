@@ -1,0 +1,158 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &6365504129967856482
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 8126242627610425617}
+  - component: {fileID: 2305706616405510563}
+  - component: {fileID: 4784618357346260175}
+  - component: {fileID: 2624534024736879029}
+  - component: {fileID: 3765411901084863943}
+  - component: {fileID: 8517580249105396204}
+  m_Layer: 2
+  m_Name: Master_ThrowableItem
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &8126242627610425617
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6365504129967856482}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 0.10360021, y: 0.10360021, z: 0.10360021}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!33 &2305706616405510563
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6365504129967856482}
+  m_Mesh: {fileID: 10207, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!23 &4784618357346260175
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6365504129967856482}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 0
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 31321ba15b8f8eb4c954353edc038b1d, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 0
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_AdditionalVertexStreams: {fileID: 0}
+--- !u!135 &2624534024736879029
+SphereCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6365504129967856482}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Radius: 0.5
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!114 &3765411901084863943
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6365504129967856482}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f907f239741ed7947961693c41440025, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ThrowableObject
+  trunkOriginator: {fileID: 7829581425871931375, guid: fbf22b3699f8d0d4b8f00d357cbad3a2, type: 3}
+  fungusOriginator: {fileID: 3736618215219695993, guid: 3582c33e6210fef469b1d6de630e829b, type: 3}
+  explosionOriginator: {fileID: 0}
+  crystalOriginator: {fileID: 0}
+  plantTag: {fileID: 11400000, guid: 212153aa0e5b9c646b5bfd67faaaf9d8, type: 2}
+  soilTag: {fileID: 11400000, guid: 10fab889037deeb48ad1754a86584ab2, type: 2}
+  aliveTag: {fileID: 11400000, guid: da29367ebc1b1fd4faedc1ce2dfd968b, type: 2}
+  crystalTag: {fileID: 11400000, guid: 7a27f809ea0047749ae7ae64c38a2b47, type: 2}
+  deadTag: {fileID: 11400000, guid: 92e6c09b5843cd842980f17441854f17, type: 2}
+  etherealTag: {fileID: 11400000, guid: 323705cc2c42b014bb7d0e051624cdd6, type: 2}
+  fungusTag: {fileID: 11400000, guid: 54946a146690be147a6462ef83a26ff2, type: 2}
+  mineralTag: {fileID: 11400000, guid: 92009221d05b30d4081cc46e9b17b291, type: 2}
+  organicTag: {fileID: 11400000, guid: 6775f49289083d64dbc1b450f91b69b3, type: 2}
+  rockTag: {fileID: 11400000, guid: d989459694f611b41894f6ea4b5a240e, type: 2}
+  substanceTag: {fileID: 11400000, guid: f4fccd1717eb07b49862280b8e8d2fd9, type: 2}
+  woodTag: {fileID: 11400000, guid: 595c419b3ae215649944e8d135f04f1b, type: 2}
+  breakableTag: {fileID: 11400000, guid: a311a13c20ccc7b4c8061a9e2a6f7570, type: 2}
+  explosiveTag: {fileID: 11400000, guid: b50c0c13dc014e348948f3d68a2fb794, type: 2}
+--- !u!114 &8517580249105396204
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6365504129967856482}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4680adaae7bfbef4cafeaac04a8be242, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TagObjManager
+  tags: []

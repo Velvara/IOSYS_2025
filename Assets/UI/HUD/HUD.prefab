@@ -1,0 +1,101 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &7149006102653012096
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7346100951170818210}
+  - component: {fileID: 2246391758878584202}
+  - component: {fileID: 668873366425590870}
+  - component: {fileID: 8298814037327130152}
+  m_Layer: 0
+  m_Name: HUD
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &7346100951170818210
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7149006102653012096}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2246391758878584202
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7149006102653012096}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 19102, guid: 0000000000000000e000000000000000, type: 0}
+  m_Name: 
+  m_EditorClassIdentifier: UnityEngine.dll::UnityEngine.UIElements.UIDocument
+  m_PanelSettings: {fileID: 11400000, guid: c45fd6f56fb4cf74f8b971e82088a502, type: 2}
+  m_ParentUI: {fileID: 0}
+  sourceAsset: {fileID: 9197481963319205126, guid: 97892aed9948d334d8065801641fa7ee, type: 3}
+  m_SortingOrder: 0
+  m_Position: 0
+  m_WorldSpaceSizeMode: 1
+  m_WorldSpaceWidth: 1920
+  m_WorldSpaceHeight: 1080
+  m_PivotReferenceSize: 0
+  m_Pivot: 0
+  m_WorldSpaceCollider: {fileID: 0}
+--- !u!114 &668873366425590870
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7149006102653012096}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a64a4d0b92fe9be478d961ee6f1020c6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::StarterAssets.SurvivalBarsController
+  _document: {fileID: 2246391758878584202}
+  StaminaFillColor: {r: 0.20000002, g: 0.8000001, b: 0.20000002, a: 1}
+  StaminaEffectiveMaxColor: {r: 0.10196079, g: 0.40000004, b: 0.10196079, a: 1}
+  StaminaTrackColor: {r: 0.14901961, g: 0.14901961, b: 0.14901961, a: 0.8}
+  StaminaIconEmptyTint: {r: 0.20000002, g: 0.8000001, b: 0.20000002, a: 1}
+  StaminaOrangeNormalColor: {r: 0.40000004, g: 0.20784315, b: 0, a: 1}
+  StaminaRedNormalColor: {r: 0.7686275, g: 0, b: 0, a: 1}
+  StaminaRedBlinkColor: {r: 1, g: 0.32887805, b: 0, a: 1}
+  StaminaRedBlinkRate: 0.4
+  ThirstFillColor: {r: 0.2, g: 0.7, b: 0.9, a: 1}
+  ThirstTrackNormalColor: {r: 0.16078432, g: 0.23137257, b: 0.40000004, a: 0.8}
+  ThirstEmptyColor: {r: 0.16078432, g: 0.23137257, b: 0.40000004, a: 1}
+  HungerFillColor: {r: 0.79215693, g: 0.41176474, b: 0, a: 1}
+  HungerTrackNormalColor: {r: 0.40000004, g: 0.20784315, b: 0, a: 1}
+  HungerEmptyColor: {r: 0.40000004, g: 0.20784315, b: 0, a: 1}
+  HungerBlinkColor: {r: 1, g: 1, b: 1, a: 1}
+  HungerBlinkRate: 1
+--- !u!114 &8298814037327130152
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7149006102653012096}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ff95cce0f3a6408418866d83a20dbd61, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::StarterAssets.HUDController
+  _playerObject: {fileID: 0}

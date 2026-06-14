@@ -1,0 +1,76 @@
+#bars-container {
+    flex-grow: 1;
+    height: 100%;
+    flex-direction: row;
+    justify-content: center;
+    align-self: center;
+    align-content: center;
+    width: 354px;
+    padding-top: 0;
+    padding-right: 0;
+    padding-bottom: 0;
+    padding-left: 0;
+    align-items: center;
+}
+
+#thirst-bar {
+    flex-grow: 1;
+    background-image: url("project://database/Assets/UI/Widgets/SurvivalBars/Icons/ico_Thirst.png?fileID=2800000&guid=9792dff95d436db4db93abde377e5684&type=3#ico_Thirst");
+    width: 50%;
+    background-size: 55px 55px;
+    height: 75%;
+    margin-top: 12px;
+    margin-right: 12px;
+    margin-bottom: 12px;
+    margin-left: 12px;
+    min-width: 25%;
+    min-height: 25%;
+    max-height: 100%;
+    max-width: 100%;
+}
+
+#hunger-bar {
+    flex-grow: 1;
+    background-image: url("project://database/Assets/UI/Widgets/SurvivalBars/Icons/ico_Hunger.png?fileID=2800000&guid=d0931c3ad097f9e46b97dc51717c9726&type=3#ico_Hunger");
+    width: 50%;
+    background-size: 55px 55px;
+    height: 75%;
+    margin-top: 12px;
+    margin-right: 12px;
+    margin-bottom: 12px;
+    margin-left: 12px;
+    min-width: 25%;
+    min-height: 25%;
+    max-height: 100%;
+    max-width: 100%;
+}
+
+#stamina-bar {
+    flex-grow: 1;
+    background-image: url("project://database/Assets/UI/Widgets/SurvivalBars/Icons/ico_Sta.png?fileID=2800000&guid=b8210287dff9a32408f4f7e286aa3ba5&type=3#ico_Sta");
+    width: 50%;
+    background-size: 70px 70px;
+    height: 75%;
+    padding-top: 0;
+    padding-right: 0;
+    padding-bottom: 0;
+    padding-left: 0;
+    margin-top: 6px;
+    margin-right: 6px;
+    margin-bottom: 6px;
+    margin-left: 6px;
+    min-width: 25%;
+    min-height: 25%;
+    max-width: 100%;
+    max-height: 100%;
+}
+
+#SurvivalBars {
+    background-color: rgba(0, 0, 0, 0);
+    flex-grow: 1;
+    bottom: 40px;
+    right: 40px;
+    width: 25%;
+    position: absolute;
+    height: 13%;
+}
