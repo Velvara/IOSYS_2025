@@ -1,60 +1,52 @@
-# This .gitignore file is tailored for Unity projects.
+# This .gitignore file is for a Unity project.
+#
 
-/[Aa]sset/[Mm]eta.json
-/[Aa]ssests/[Mm]eta.json.meta
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ex]portedObj/
+/[Ll]ogs/
+/[Vv]ideo/
 
-# Never git ignore meta files
-!/[Aa]ssets/**/*.meta
-!/[Pp]roject[Ss]ettings/**/*.meta
-
-# Blacklist Items
-[Cc]ache/
-[尝]og/
-[尝]ogs/
-[Oo]bj/
-[Bb]uild/
-[Bb]uilds/
-[Dd]ebug/
-[Release]/
-[Assets]/AssetStoreTools*
-
-# Generated folders
-[尝]ibrary/
-[临时]Temp/
-[小]Obj/
-
-# Visual Studio / MonoDevelop / Rider generated items
-ExportedObj/
-.consulo/
-.csproj
-.unityproj
-.sln
-.suo
-.tmp
-.user
-.userprefs
-.pidb
-.booproj
-.svclog
-.saved
-備份/
-
-# IDE specific directories
-.idea/
-.visualstudio/
-.vscode/
+# Memory dumps
+*.log
+*.dump
 
 # Crashlytics generated file
 crashlytics-build.properties
 
-# Packed Addressables
-/[Aa]ssets/[Ss]treamingAssets/aa/*
-
-# OS generated files
+# Mac OS files
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
+.AppleDouble
+.LSOverride
+
+# Windows thumbnail caches
 Thumbs.db
+ehthumbs.db
+
+# Visual Studio / Rider / VS Code isolation and cache folders
+.vs/
+.idea/
+.gradle/
+.RiderCpp*/
+*.sln
+*.csproj
+*.unityproj
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Built application files
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# Asset store packages (can be re-downloaded)
+/[Aa]ssets/AssetStoreTools*
+
+# WebGL build output
+/[Aa]ssets/[Ww]ebGLTemplates/*/[Dd]evelopment/
