@@ -317,7 +317,7 @@ Transform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!120 &7084225828992321701
 LineRenderer:
-  serializedVersion: 2
+  serializedVersion: 3
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
@@ -363,6 +363,7 @@ LineRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   m_Positions:
   - {x: 0, y: 0, z: 0}
   - {x: 0, y: 0, z: 1}
@@ -421,7 +422,6 @@ LineRenderer:
     textureScale: {x: 1, y: 1}
     shadowBias: 0.5
     generateLightingData: 0
-  m_MaskInteraction: 0
   m_UseWorldSpace: 1
   m_Loop: 0
   m_ApplyActiveColorSpace: 1
@@ -2108,6 +2108,8 @@ GameObject:
   - component: {fileID: 5104532340395650805}
   - component: {fileID: 3979376229822392797}
   - component: {fileID: 1171519923474619587}
+  - component: {fileID: 3182360227790851619}
+  - component: {fileID: 5157414874822327530}
   m_Layer: 3
   m_Name: PlayerArmature
   m_TagString: Player
@@ -2224,8 +2226,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   RotateOnMove: 1
-  MoveSpeed: 2
-  SprintSpeed: 5.335
+  RunSpeed: 5
+  SprintSpeed: 12
+  FatiguedSpeed: 1.2
+  StealthSpeed: 2
+  cameraFrozen: 0
   RotationSmoothTime: 0.12
   SpeedChangeRate: 10
   LandingAudioClip: {fileID: 8300000, guid: ff697d3070687ce4583faa0561a145a2, type: 3}
@@ -2256,6 +2261,7 @@ MonoBehaviour:
   BottomClamp: -30
   CameraAngleOverride: 0
   LockCameraPosition: 0
+  _mainCamera: {fileID: 0}
 --- !u!114 &5885216827943657505
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2290,9 +2296,17 @@ MonoBehaviour:
   jump: 0
   sprint: 0
   aim: 0
+  stealth: 0
   analogMovement: 0
   cursorLocked: 1
   cursorInputForLook: 1
+  inputsLocked: 0
+  debugRest: 0
+  debugEat: 0
+  debugDrink: 0
+  debugDrainStamina: 0
+  debugDrainHunger: 0
+  debugDrainThirst: 0
 --- !u!114 &4416926081852918493
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2498,7 +2512,7 @@ MonoBehaviour:
   playerTransform: {fileID: 3893294197879345259}
   camHeight: 0.21
   camDist: 1.22
-  camSide: 0.683
+  camSide: 0.9
   maxVerticalAngle: 75
   trajectory: {fileID: 7605656792267764845}
   aimDirection: {fileID: 0}
@@ -2549,8 +2563,8 @@ MonoBehaviour:
   cinemachineThirdPersonFollow: {fileID: 0}
   playerTransform: {fileID: 3893294197879345259}
   camHeight: 0.21
-  camDist: 0.4
-  camSide: 0.639
+  camDist: 0.2
+  camSide: 0.7
   maxVerticalAngle: 75
   playerInput: {fileID: 4416926081852918493}
   starterInputs: {fileID: 135756642000475821}
@@ -2632,7 +2646,94 @@ MonoBehaviour:
   maxVerticalAngle: 75
   dragSpeed: 12
   stopDistance: 2
+  dragSpeedCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0.4595194
+      inSlope: 4.883487
+      outSlope: 4.883487
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0.10136948
+    - serializedVersion: 3
+      time: 0.3144192
+      value: 0.99295866
+      inSlope: -0.0073478953
+      outSlope: -0.0073478953
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.3933762
+    - serializedVersion: 3
+      time: 0.86030495
+      value: 0.61071587
+      inSlope: -2.3586922
+      outSlope: -2.3586922
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.210452
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  dragRotationAmount: 1
+  failsafeDelay: 1
   cameraDragLag: 5
+  rotationSpeed: 5
+--- !u!114 &3182360227790851619
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4416926081852918481}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f3086b097c2f5e84c9cad3b58ef89fc1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.StarterAssets::StarterAssets.PlayerStamina
+  StaminaDrainRate: 5
+  StaminaRecoveryRate: 5
+  StaminaRecoveryRateFloorPct: 10
+  MaxStaDrainThreshold: 15
+  RestMaxPenaltyRate: 1
+  RestMaxStaHardFloor: 50
+  HungerMaxStaHardFloor: 25
+  ThirstDrainRate: 0.24
+  ThirstRestoreRate: 25
+  HungerDrainRate: 0.144
+  HungerMaxPenaltyCap: 25
+  HungerMaxDrainRate: 0.25
+  HungerRestoreRate: 25
+  HungerMaxRestoreRate: 25
+  DebugStaminaDrainRate: 50
+  DebugHungerDrainRate: 50
+  DebugThirstDrainRate: 50
+--- !u!114 &5157414874822327530
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4416926081852918481}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dbe3ab17949b44a4fb273a264339a55f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.StarterAssets::StarterAssets.DebugSurvivalInputs
+  _stamina: {fileID: 3182360227790851619}
 --- !u!1 &4523139366846529165
 GameObject:
   m_ObjectHideFlags: 0
@@ -3618,6 +3719,7 @@ SkinnedMeshRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   serializedVersion: 2
   m_Quality: 0
   m_UpdateWhenOffscreen: 0
@@ -4882,6 +4984,7 @@ SkinnedMeshRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   serializedVersion: 2
   m_Quality: 0
   m_UpdateWhenOffscreen: 0
@@ -5167,6 +5270,7 @@ SkinnedMeshRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   serializedVersion: 2
   m_Quality: 0
   m_UpdateWhenOffscreen: 0

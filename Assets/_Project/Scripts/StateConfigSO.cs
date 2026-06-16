@@ -1,5 +1,4 @@
 using UnityEngine;
-using Game.PlayerV2.Systems;
 
 namespace Game.PlayerV2
 {
@@ -67,14 +66,6 @@ namespace Game.PlayerV2
         [Tooltip("Duration of the crossfade transition")]
         [Range(0f, 1f)]
         public float crossfadeDuration = 0.2f;
-
-        #endregion
-
-        #region Camera Configuration
-
-        [Header("Camera Settings")]
-        [Tooltip("Camera settings for this state")]
-        public CameraSettingsData cameraSettings = new CameraSettingsData();
 
         #endregion
 

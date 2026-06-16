@@ -19,28 +19,30 @@ namespace Game.PlayerV2
 
         #region Animation Parameters
         
-        // Float parameters
-        public const string ANIM_SPEED = "speed";
+        // ── Real animator contract (StarterAssetsThirdPerson.controller) ──
+        // These names/types MUST match the live Animator Controller exactly.
+        // Floats:
+        public const string ANIM_SPEED = "Speed";              // 0..1, normalized to SprintSpeed
+        public const string ANIM_MOTION_SPEED = "MotionSpeed"; // input magnitude (blend playback rate)
+        // Bools:
+        public const string ANIM_GROUNDED = "Grounded";
+        public const string ANIM_JUMP = "Jump";                // bool, NOT a trigger
+        public const string ANIM_FREE_FALL = "FreeFall";
+        public const string ANIM_SPRINT = "Sprint";
+        public const string ANIM_FATIGUED = "Fatigued";
+        public const string ANIM_STEALTH = "Stealth";
+
+        // ── Future params (NOT in the animator yet; Set*Safe no-ops until added) ──
+        // Driven by states/systems in later phases (swim, scan, drained, throw…).
         public const string ANIM_TURN_SPEED = "turnSpeed";
-        public const string ANIM_VERTICAL_VELOCITY = "verticalVelocity";
         public const string ANIM_SCAN_PROGRESS = "scanProgress";
-        
-        // Bool parameters
-        public const string ANIM_IS_GROUNDED = "IsGrounded";
-        public const string ANIM_IS_SPRINTING = "IsSprinting";
-        public const string ANIM_IS_STEALTH = "IsStealth";
         public const string ANIM_IS_IN_WATER = "IsInWater";
         public const string ANIM_IS_DRAINED = "IsDrained";
         public const string ANIM_HAS_STAMINA = "HasStamina";
-        
-        // Trigger parameters
-        public const string ANIM_JUMP = "Jump";
         public const string ANIM_INTERACT = "Interact";
         public const string ANIM_START_SCAN = "StartScan";
         public const string ANIM_COMPLETE_SCAN = "CompleteScan";
         public const string ANIM_THROW = "Throw";
-        
-        // Integer parameters
         public const string ANIM_MOVEMENT_STATE = "MovementState";
         public const string ANIM_ACTION_TYPE = "ActionType";
         

@@ -1,11 +1,11 @@
-using StarterAssets;
 using UnityEngine;
+using Game.PlayerV2;
 
 public class HookshotDragMode : AimModeBase
 {
     [Header("Drag Settings")]
-    public float dragSpeed = 10f;
-    public float stopDistance = 1f;
+    public float dragSpeed = 12f;
+    public float stopDistance = 2f;
 
     [Header("Animation Curve & Rotation")]
     [Tooltip("The curve to apply to drag speed over the duration of the movement.")]
@@ -28,33 +28,33 @@ public class HookshotDragMode : AimModeBase
     private float initialDistance;
     private Quaternion startRotation;
 
+    private IControlLock _controlLock;
+
     private void Awake()
     {
-        // Find TPC (inherited 'controller' field)
-        if (tpcController == null)
-            tpcController = GetComponentInParent<StarterAssets.ThirdPersonController>();
+        _controlLock = GetComponentInParent<IControlLock>();
 
-        if (tpcController == null)
-            Debug.LogError("HookshotDragMode could not find ThirdPersonController on activation path.");
+        if (_controlLock == null || PlayerMotor == null)
+            Debug.LogError("HookshotDragMode could not find the PlayerV2 controller (IControlLock/IPlayerMotor) on the player hierarchy.");
+    }
+
+    // Default aim-camera framing for this mode (applied when the component is added).
+    private void Reset()
+    {
+        camHeight = 0f;
+        camDist = 8f;
+        camSide = 0.5f;
+        maxVerticalAngle = 75f;
     }
 
     public override void EnterMode()
     {
         base.EnterMode();
 
-        if (tpcController != null)
-        {
-            tpcController.IsExternalControlActive = true;
-            startRotation = tpcController.transform.rotation;
-        }
-
-        // **Crucial:** Clear input to stop default movement/jumping instantly
-        if (tpcController.TryGetComponent<StarterAssetsInputs>(out var inputs))
-        {
-            inputs.MoveInput(Vector2.zero);
-            inputs.JumpInput(false);
-            inputs.SprintInput(false);
-        }
+        _controlLock?.RequestExternalControl();
+        if (PlayerMotor != null)
+            startRotation = PlayerMotor.Transform.rotation;
+        // Movement input is relinquished automatically by the ExternalControl state.
 
         // Adjust camera distance to create a "lagging" effect
         if (AimManager.Instance != null && AimManager.Instance.cameraFollow != null)
@@ -92,38 +92,24 @@ public class HookshotDragMode : AimModeBase
         isDragging = true;
 
         hasLoggedInitialCheck = false; // <-- Reset on START
-        initialDistance = (tipTransform.position - tpcController.transform.position).magnitude;
+        initialDistance = (tipTransform.position - PlayerMotor.Transform.position).magnitude;
     }
 
     private void FixedUpdate()
     {
-        bool isDraggingOK = isDragging;
-        bool activeHookshotOK = activeHookshot != null;
-        bool tipTransformOK = tipTransform != null;
-        bool controllerOK = tpcController != null;
-        CharacterController tpcCharacterController = tpcController?.GetComponent<CharacterController>();
-
         if (!isDragging)
             return; // Basic check to skip when not dragging
 
-        bool checkFailed = (activeHookshot == null || tipTransform == null || tpcController == null || tpcCharacterController == null);
+        var motor = PlayerMotor;
+        CharacterController tpcCharacterController = motor?.Controller;
+
+        bool checkFailed = (activeHookshot == null || tipTransform == null || motor == null || tpcCharacterController == null);
 
         if (checkFailed)
         {
             if (!hasLoggedInitialCheck)
             {
-                Debug.LogError("FATAL DRAG CHECK FAILED! Analyzing culprits:");
-                Debug.Log($"  isDragging: {isDragging}"); // Should be True
-                Debug.Log($"  activeHookshot: {activeHookshot != null}");
-                Debug.Log($"  tipTransform: {tipTransform != null}");
-                Debug.Log($"  TPC controller (AimModeBase): {tpcController != null}");
-                Debug.Log($"  CharacterController (Local): {tpcCharacterController != null}");
-
-                if (tpcController != null)
-                {
-                    Debug.Log($"  TPC Script Enabled: {tpcController.enabled}");
-                }
-
+                Debug.LogError("[HookshotDragMode] Drag check failed (missing hookshot, tip, or PlayerV2 motor/controller).");
                 hasLoggedInitialCheck = true; // Prevents logging this again
             }
 
@@ -131,7 +117,7 @@ public class HookshotDragMode : AimModeBase
         }
 
         // Use the player's root transform for distance calculation
-        Transform playerTransform = tpcController.transform;
+        Transform playerTransform = motor.Transform;
 
         // 1. Calculate the movement direction (a vector *to* the tip)
         Vector3 dragDirection = tipTransform.position - playerTransform.position;
@@ -201,23 +187,21 @@ public class HookshotDragMode : AimModeBase
         }
 
         // Set a default, level rotation before exiting drag mode.
-        // This is vital to prevent the TPC from snapping/glitching upon re-enable.
-        if (tpcController != null)
+        // This is vital to prevent the controller from snapping/glitching upon resume.
+        var motor = PlayerMotor;
+        if (motor != null)
         {
-            Transform playerTransform = tpcController.transform;
+            Transform playerTransform = motor.Transform;
 
             // Reset the rotation to horizontal, facing the current forward direction.
             playerTransform.rotation = Quaternion.LookRotation(
-            Vector3.ProjectOnPlane(playerTransform.forward, Vector3.up).normalized,
-            Vector3.up
-            );
+                Vector3.ProjectOnPlane(playerTransform.forward, Vector3.up).normalized,
+                Vector3.up);
+
+            motor.RotateOnMove = true;
         }
 
-        if (tpcController != null)
-        {
-            tpcController.RotateOnMove = true;
-            tpcController.IsExternalControlActive = false; // <-- Reset the flag LAST
-        }
+        _controlLock?.ReleaseExternalControl(); // <-- Return control LAST
 
         if (animator != null)
         {

@@ -30,6 +30,16 @@ namespace Game.PlayerV2.States
         /// </summary>
         public Transform Transform { get; set; }
 
+        /// <summary>
+        /// Movement mechanics shared by all locomotion states (owns speed/rotation/gravity).
+        /// </summary>
+        public PlayerMotor Motor { get; set; }
+
+        /// <summary>
+        /// Camera rig (look). Used by ExternalControl to freeze look. May be null.
+        /// </summary>
+        public PlayerCameraRig CameraRig { get; set; }
+
         #endregion
 
         #region System References
@@ -53,11 +63,6 @@ namespace Game.PlayerV2.States
         /// Inventory management system
         /// </summary>
         public Systems.InventorySystem Inventory { get; set; }
-
-        /// <summary>
-        /// Camera management system
-        /// </summary>
-        public Systems.CameraManager CameraManager { get; set; }
 
         #endregion
 

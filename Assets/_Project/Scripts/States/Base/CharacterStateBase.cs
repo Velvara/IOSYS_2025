@@ -1,5 +1,4 @@
 using UnityEngine;
-using Game.PlayerV2.Systems;
 
 namespace Game.PlayerV2.States
 {
@@ -63,12 +62,6 @@ namespace Game.PlayerV2.States
             _context = context;
             _context.ResetTimeData();
 
-            // Apply camera settings if available
-            if (_context.CameraManager != null)
-            {
-                _context.CameraManager.ApplySettings(GetCameraSettings());
-            }
-
             // Debug log
             if (Application.isEditor)
             {
@@ -104,86 +97,19 @@ namespace Game.PlayerV2.States
 
         public abstract CharacterStateType CheckTransitions(StateContext context);
 
-        public virtual CameraSettings GetCameraSettings()
-        {
-            // Return default camera settings if no config is set
-            if (_config != null && _config.cameraSettings != null)
-            {
-                return new CameraSettings(_config.cameraSettings);
-            }
-
-            return CameraSettings.Default;
-        }
-
         #endregion
 
         #region Protected Helper Methods
 
-        /// <summary>
-        /// Applies movement to the character controller
-        /// </summary>
-        protected void ApplyMovement(Vector3 movement, float deltaTime)
-        {
-            if (_context.CharacterController != null)
-            {
-                _context.CharacterController.Move(movement * deltaTime);
-            }
-        }
-
-        /// <summary>
-        /// Applies gravity to velocity
-        /// </summary>
-        protected void ApplyGravity(float deltaTime)
-        {
-            // Always apply gravity
-            _context.Velocity += Vector3.up * Constants.GRAVITY * deltaTime;
-
-            // If grounded and moving downward, clamp to small value to stay grounded
-            if (_context.IsGrounded && _context.Velocity.y < 0f)
-            {
-                _context.Velocity = new Vector3(_context.Velocity.x, -2f, _context.Velocity.z);
-            }
-        }
-
-        /// <summary>
-        /// Updates animator parameters with current movement data
-        /// </summary>
-        protected void UpdateAnimator()
-        {
-            if (_context.Animator == null) return;
-
-            // Normalize speed based on current max speed
-            float normalizedSpeed = _context.CurrentSpeed / Constants.DEFAULT_MOVE_SPEED;
-            _context.Animator.SetFloatSafe(Constants.ANIM_SPEED, normalizedSpeed);
-
-            // Set vertical velocity for jump/fall animations
-            _context.Animator.SetFloatSafe(Constants.ANIM_VERTICAL_VELOCITY, _context.Velocity.y);
-
-            // Set grounded state
-            _context.Animator.SetBoolSafe(Constants.ANIM_IS_GROUNDED, _context.IsGrounded);
-        }
-
-        /// <summary>
-        /// Rotates the character towards the movement direction
-        /// </summary>
-        protected void RotateTowardsMovement(float turnSpeed, float deltaTime)
-        {
-            if (_context.MoveDirection.sqrMagnitude < 0.01f) return;
-
-            Quaternion targetRotation = Quaternion.LookRotation(_context.MoveDirection);
-            _context.Transform.rotation = Quaternion.RotateTowards(
-                _context.Transform.rotation,
-                targetRotation,
-                turnSpeed * deltaTime
-            );
-        }
+        // Movement mechanics and animator writes are owned by PlayerMotor (driven by states);
+        // states are thin policy and no longer move the controller or set animator params directly.
 
         /// <summary>
         /// Checks if stamina is available for this state
         /// </summary>
-        protected bool HasStamina()
+        protected bool HasStamina(StateContext context)
         {
-            return _context.Stamina != null && !_context.Stamina.IsDepleted;
+            return context.Stamina != null && !context.Stamina.IsDepleted;
         }
 
         /// <summary>

@@ -3,30 +3,43 @@ using UnityEngine;
 namespace Game.PlayerV2.Systems
 {
     /// <summary>
-    /// Placeholder for StaminaSystem - will be fully implemented in Phase 3
+    /// Adapter over the real <see cref="PlayerStamina"/> survival component. The controller
+    /// ticks it once per frame with whether the player is sprinting; PlayerStamina owns all
+    /// drain/recovery/thirst/hunger logic and the fatigue state. States read IsFatigued /
+    /// IsDepleted through this adapter.
+    ///
+    /// NOTE: PlayerStamina currently lives in the Game.Player assembly; it moves into
+    /// Game.PlayerV2 at the final prefab swap (see phase2-decisions memory).
     /// </summary>
     public class StaminaSystem
     {
-        public bool IsDepleted => false;
+        private readonly PlayerStamina _stamina;
+
+        public StaminaSystem(PlayerStamina stamina)
+        {
+            _stamina = stamina;
+        }
+
+        /// <summary>
+        /// Advances the survival system one frame. Pass true while the player is sprinting
+        /// (drains stamina); otherwise it recovers. Mirrors ThirdPersonController's per-frame
+        /// PlayerStamina.Tick call.
+        /// </summary>
+        public void Tick(bool isSprinting)
+        {
+            if (_stamina != null) _stamina.Tick(isSprinting);
+        }
+
+        /// <summary>True while fatigued (stamina hit 0, recovering to the fatigue floor).</summary>
+        public bool IsFatigued => _stamina != null && _stamina.IsFatigued;
+
+        public float CurrentStamina => _stamina != null ? _stamina.CurrentStamina : 0f;
+
+        /// <summary>No stamina left to start or continue sprinting.</summary>
+        public bool IsDepleted => _stamina == null || _stamina.CurrentStamina <= 0f;
+
+        /// <summary>Reserved for future drained/drowned states (not used yet).</summary>
         public bool IsFullyDepleted => false;
-        public float CurrentStamina => 100f;
-        public float CurrentMaxStamina => 100f;
-        public float MaxStamina => 100f;
-
-        public void Update(float deltaTime)
-        {
-            // TODO: Implement in Phase 3
-        }
-
-        public void DrainStamina(float amount)
-        {
-            // TODO: Implement in Phase 3
-        }
-
-        public void RecoverStamina(float amount)
-        {
-            // TODO: Implement in Phase 3
-        }
     }
 
     /// <summary>
@@ -65,37 +78,6 @@ namespace Game.PlayerV2.Systems
         public void CycleBackward()
         {
             // TODO: Implement later
-        }
-    }
-
-    /// <summary>
-    /// Placeholder for CameraManager - will be fully implemented in Phase 3
-    /// </summary>
-    public class CameraManager
-    {
-        private Transform _cameraTransform;
-        private Transform _target;
-
-        public void Initialize(Transform cameraTransform, Transform target)
-        {
-            _cameraTransform = cameraTransform;
-            _target = target;
-            // TODO: Implement in Phase 3
-        }
-
-        public void ApplySettings(CameraSettings settings)
-        {
-            // TODO: Implement in Phase 3
-        }
-
-        public void Update(float deltaTime)
-        {
-            // TODO: Implement in Phase 3
-        }
-
-        public void LateUpdate(float deltaTime)
-        {
-            // TODO: Implement in Phase 3
         }
     }
 }

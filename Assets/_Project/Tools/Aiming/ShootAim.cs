@@ -1,4 +1,3 @@
-using StarterAssets;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering.Universal;
@@ -7,8 +6,6 @@ public class ShootAim : AimModeBase
 {
     [Header("Input System (injected by AimManager)")]
     public PlayerInput playerInput;
-    public StarterAssetsInputs starterInputs;
-    //public StarterAssets.ThirdPersonController tpcController;
 
     private HeldItemHandler heldHandler = new HeldItemHandler();
 
@@ -27,7 +24,7 @@ public class ShootAim : AimModeBase
 
     [Header("Vertical Aim Control")]
     [Tooltip("Multiplier for upward aim exaggeration.")]
-    public float lookUpMultiplier = 2.0f;
+    public float lookUpMultiplier = 10f;
 
     [Tooltip("Curve to control the exaggeration. X-axis is camera pitch (0 to 90), Y-axis is multiplier (0 to 1).")]
     public AnimationCurve lookUpCurve = AnimationCurve.Linear(0f, 0f, 90f, 1f);
@@ -38,6 +35,15 @@ public class ShootAim : AimModeBase
     private enum TargetType { None, Valid, Invalid }
 
     private GameObject CurrentHeldItem => heldHandler.heldObj;
+
+    // Default aim-camera framing for this mode (applied when the component is added).
+    private void Reset()
+    {
+        camHeight = 0.21f;
+        camDist = 0.2f;
+        camSide = 0.7f;
+        maxVerticalAngle = 75f;
+    }
 
     public override void EnterMode()
     {
@@ -82,7 +88,7 @@ public class ShootAim : AimModeBase
     {
         base.UpdateMode();
 
-        Vector2 input = starterInputs != null ? starterInputs.CurrentMoveInput : Vector2.zero;
+        Vector2 input = MoveInput;
         animator?.SetFloat("AimMoveX", input.x);
         animator?.SetFloat("AimMoveY", input.y);
 
@@ -146,11 +152,11 @@ public class ShootAim : AimModeBase
         {
             upPitchAngle = 360f - pitchAngle;
 
-            if (tpcController.cameraFrozen == true)
+            if (IsCameraFrozen)
             {
                 upPitchAngle = 0f;
             }
-            
+
             normalizedPitchForCurve = Mathf.Clamp(upPitchAngle, 0f, 90f);
         }
         // If pitchAngle is 0 to 180 (straight or down), normalizedPitchForCurve remains 0.
@@ -167,7 +173,7 @@ public class ShootAim : AimModeBase
             // Calculate the final upward boost by multiplying the curve value by the public multiplier
             float upwardBoost = curveFactor * lookUpMultiplier;
 
-            if (tpcController.cameraFrozen == true)
+            if (IsCameraFrozen)
             {
                 Vector3 finalDirection = rawDirection;
                 return finalDirection.normalized;
@@ -305,7 +311,7 @@ public class ShootAim : AimModeBase
         // add rope script
         var rope = ropeObj.AddComponent<HookshotRope>();
 
-        // assign material (so it doesn’t show as pink)
+        // assign material (so it doesnï¿½t show as pink)
         mr.material = hookshot.ropeMaterial;
 
         // init rope

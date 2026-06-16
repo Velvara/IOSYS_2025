@@ -1,4 +1,4 @@
-namespace StarterAssets
+namespace Game.PlayerV2.Systems
 {
     /// <summary>
     /// Exposes normalized survival bar values for any character that has a stamina system.

@@ -1,13 +1,34 @@
 using UnityEngine;
+using Game.PlayerV2;
 
 public abstract class AimModeBase : MonoBehaviour, IAimMode
 {
     [Header("Shared References")]
     public Animator animator;
-    public StarterAssets.ThirdPersonController tpcController;
     public Transform cameraTransform;
     public Unity.Cinemachine.CinemachineThirdPersonFollow cinemachineThirdPersonFollow;
     public Transform playerTransform;
+
+    // ── PlayerV2 controller interfaces (resolved from the player hierarchy) ──
+    private IPlayerMotor _playerMotor;
+    private ICameraState _cameraState;
+    private InputHandler _input;
+
+    protected IPlayerMotor PlayerMotor => _playerMotor ??= GetComponentInParent<IPlayerMotor>();
+    protected ICameraState CameraState => _cameraState ??= GetComponentInParent<ICameraState>();
+
+    /// <summary>Camera look is frozen (e.g. external control); aim modes skip rotation/exaggeration.</summary>
+    public bool IsCameraFrozen => CameraState != null && CameraState.IsCameraFrozen;
+
+    /// <summary>Player move input (replaces the old StarterAssetsInputs.CurrentMoveInput).</summary>
+    protected Vector2 MoveInput
+    {
+        get
+        {
+            _input ??= GetComponentInParent<InputHandler>();
+            return _input != null ? _input.MoveInput : Vector2.zero;
+        }
+    }
 
     [Header("Target Camera Settings")]
     public float camHeight = 1.2f;
@@ -46,12 +67,13 @@ public abstract class AimModeBase : MonoBehaviour, IAimMode
     public virtual void EnterMode()
     {
         if (animator) animator.SetBool("IsAiming", true);
-        if (tpcController) tpcController.RotateOnMove = false;
+        var motor = PlayerMotor;
+        if (motor != null) motor.RotateOnMove = false;
     }
 
     public virtual void UpdateMode()
     {
-        if (tpcController != null && tpcController.cameraFrozen)
+        if (IsCameraFrozen)
         {
             if (animator != null)
             {
@@ -80,7 +102,8 @@ public abstract class AimModeBase : MonoBehaviour, IAimMode
             int upperBodyLayer = animator.GetLayerIndex("AimingUpperbody");
             animator.CrossFade("UpperBodyIdle", 0.2f, upperBodyLayer);
         }
-        if (tpcController) tpcController.RotateOnMove = true;
+        var motor = PlayerMotor;
+        if (motor != null) motor.RotateOnMove = true;
     }
 
     public virtual void OnItemChanged(GameObject newItem) { }

@@ -33,24 +33,10 @@ namespace Game.PlayerV2
         public bool JumpPressed => _jumpBufferCounter > 0f;
 
         /// <summary>
-        /// Was interact button pressed this frame?
-        /// </summary>
-        public bool InteractPressed { get; private set; }
-
-        /// <summary>
-        /// Is aim button held?
+        /// Is aim button held? Used by the controller to suppress sprint while aiming.
+        /// Item use / fire / scan are handled by the aim systems reading PlayerInput directly.
         /// </summary>
         public bool AimHeld { get; private set; }
-
-        /// <summary>
-        /// Is scan button held?
-        /// </summary>
-        public bool ScanHeld { get; private set; }
-
-        /// <summary>
-        /// How long has the scan button been held?
-        /// </summary>
-        public float ScanHoldTime { get; private set; }
 
         /// <summary>
         /// Is stealth toggled on?
@@ -58,19 +44,12 @@ namespace Game.PlayerV2
         public bool StealthToggled { get; private set; }
 
         /// <summary>
-        /// Was cycle inventory forward pressed?
+        /// Is the active control scheme keyboard & mouse? The camera uses this to skip
+        /// the per-frame deltaTime scaling gamepad look needs (mouse delta is already
+        /// frame-rate independent). Scheme name matches StarterAssets.inputactions.
         /// </summary>
-        public bool CycleInventoryForwardPressed { get; private set; }
-
-        /// <summary>
-        /// Was cycle inventory backward pressed?
-        /// </summary>
-        public bool CycleInventoryBackwardPressed { get; private set; }
-
-        /// <summary>
-        /// Was open inventory pressed?
-        /// </summary>
-        public bool OpenInventoryPressed { get; private set; }
+        public bool IsCurrentDeviceMouse =>
+            _playerInput != null && _playerInput.currentControlScheme == "KeyboardMouse";
 
         #endregion
 
@@ -79,9 +58,11 @@ namespace Game.PlayerV2
         private PlayerInput _playerInput;
         private InputActionMap _gameplayActionMap;
 
+        [Tooltip("Lock and hide the hardware cursor (needed for mouse look).")]
+        [SerializeField] private bool _lockCursor = true;
+
         // Input buffering
         private float _jumpBufferCounter;
-        private float _scanStartTime;
 
         // Input context
         private InputContext _currentContext = InputContext.Gameplay;
@@ -128,10 +109,25 @@ namespace Game.PlayerV2
             UnsubscribeFromInputActions();
         }
 
+        private void Start()
+        {
+            ApplyCursorLock();
+        }
+
         private void Update()
         {
             UpdateInputBuffers();
-            ResetFrameInputs();
+        }
+
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            if (hasFocus) ApplyCursorLock();
+        }
+
+        private void ApplyCursorLock()
+        {
+            Cursor.lockState = _lockCursor ? CursorLockMode.Locked : CursorLockMode.None;
+            Cursor.visible = !_lockCursor;
         }
 
         #endregion
@@ -145,23 +141,17 @@ namespace Game.PlayerV2
             // Movement and camera
             _gameplayActionMap["Move"].performed += OnMove;
             _gameplayActionMap["Move"].canceled += OnMove;
-            _gameplayActionMap["CameraLook"].performed += OnCameraLook;
-            _gameplayActionMap["CameraLook"].canceled += OnCameraLook;
+            _gameplayActionMap["Look"].performed += OnLook;
+            _gameplayActionMap["Look"].canceled += OnLook;
 
-            // Actions
+            // Actions (locomotion-relevant only; item use/cycling are owned by the
+            // aim/inventory systems, which subscribe to PlayerInput directly)
             _gameplayActionMap["Sprint"].performed += OnSprint;
             _gameplayActionMap["Sprint"].canceled += OnSprint;
             _gameplayActionMap["Jump"].performed += OnJump;
-            _gameplayActionMap["Interact"].performed += OnInteract;
             _gameplayActionMap["Aim"].performed += OnAim;
             _gameplayActionMap["Aim"].canceled += OnAim;
-            _gameplayActionMap["Scan"].performed += OnScan;
-            _gameplayActionMap["Scan"].canceled += OnScan;
             _gameplayActionMap["Stealth"].performed += OnStealth;
-
-            // Inventory
-            _gameplayActionMap["CycleInv"].performed += OnCycleInventory;
-            _gameplayActionMap["OpenInv"].performed += OnOpenInventory;
         }
 
         private void UnsubscribeFromInputActions()
@@ -170,21 +160,15 @@ namespace Game.PlayerV2
 
             _gameplayActionMap["Move"].performed -= OnMove;
             _gameplayActionMap["Move"].canceled -= OnMove;
-            _gameplayActionMap["CameraLook"].performed -= OnCameraLook;
-            _gameplayActionMap["CameraLook"].canceled -= OnCameraLook;
+            _gameplayActionMap["Look"].performed -= OnLook;
+            _gameplayActionMap["Look"].canceled -= OnLook;
 
             _gameplayActionMap["Sprint"].performed -= OnSprint;
             _gameplayActionMap["Sprint"].canceled -= OnSprint;
             _gameplayActionMap["Jump"].performed -= OnJump;
-            _gameplayActionMap["Interact"].performed -= OnInteract;
             _gameplayActionMap["Aim"].performed -= OnAim;
             _gameplayActionMap["Aim"].canceled -= OnAim;
-            _gameplayActionMap["Scan"].performed -= OnScan;
-            _gameplayActionMap["Scan"].canceled -= OnScan;
             _gameplayActionMap["Stealth"].performed -= OnStealth;
-
-            _gameplayActionMap["CycleInv"].performed -= OnCycleInventory;
-            _gameplayActionMap["OpenInv"].performed -= OnOpenInventory;
         }
 
         // Input callbacks
@@ -193,7 +177,7 @@ namespace Game.PlayerV2
             MoveInput = context.ReadValue<Vector2>();
         }
 
-        private void OnCameraLook(InputAction.CallbackContext context)
+        private void OnLook(InputAction.CallbackContext context)
         {
             LookInput = context.ReadValue<Vector2>();
         }
@@ -215,28 +199,9 @@ namespace Game.PlayerV2
             _jumpBufferCounter = Constants.JUMP_BUFFER_TIME;
         }
 
-        private void OnInteract(InputAction.CallbackContext context)
-        {
-            InteractPressed = true;
-        }
-
         private void OnAim(InputAction.CallbackContext context)
         {
             AimHeld = context.ReadValueAsButton();
-        }
-
-        private void OnScan(InputAction.CallbackContext context)
-        {
-            ScanHeld = context.ReadValueAsButton();
-            
-            if (ScanHeld)
-            {
-                _scanStartTime = Time.time;
-            }
-            else
-            {
-                ScanHoldTime = 0f;
-            }
         }
 
         private void OnStealth(InputAction.CallbackContext context)
@@ -245,23 +210,12 @@ namespace Game.PlayerV2
             StealthToggled = !StealthToggled;
         }
 
-        private void OnCycleInventory(InputAction.CallbackContext context)
+        /// <summary>
+        /// Externally sets the stealth toggle (e.g. jumping/sprinting cancels stealth).
+        /// </summary>
+        public void SetStealth(bool on)
         {
-            float value = context.ReadValue<float>();
-
-            if (value > 0.1f)
-            {
-                CycleInventoryForwardPressed = true;
-            }
-            else if (value < -0.1f)
-            {
-                CycleInventoryBackwardPressed = true;
-            }
-        }
-
-        private void OnOpenInventory(InputAction.CallbackContext context)
-        {
-            OpenInventoryPressed = true;
+            StealthToggled = on;
         }
 
         #endregion
@@ -278,23 +232,6 @@ namespace Game.PlayerV2
             {
                 _jumpBufferCounter -= Time.deltaTime;
             }
-
-            // Update scan hold time
-            if (ScanHeld)
-            {
-                ScanHoldTime = Time.time - _scanStartTime;
-            }
-        }
-
-        /// <summary>
-        /// Resets single-frame inputs (pressed/released events)
-        /// </summary>
-        private void ResetFrameInputs()
-        {
-            InteractPressed = false;
-            CycleInventoryForwardPressed = false;
-            CycleInventoryBackwardPressed = false;
-            OpenInventoryPressed = false;
         }
 
         /// <summary>
@@ -324,7 +261,10 @@ namespace Game.PlayerV2
                     _playerInput.SwitchCurrentActionMap("Player");
                     break;
                 case InputContext.UI:
-                    _playerInput.SwitchCurrentActionMap("UI");
+                    if (_playerInput.actions.FindActionMap("UI") != null)
+                        _playerInput.SwitchCurrentActionMap("UI");
+                    else
+                        Debug.LogWarning("[InputHandler] No 'UI' action map in the input asset; UI context ignored.");
                     break;
                 case InputContext.Disabled:
                     _playerInput.DeactivateInput();
@@ -371,13 +311,8 @@ namespace Game.PlayerV2
             LookInput = Vector2.zero;
             SprintHeld = false;
             _jumpBufferCounter = 0f;
-            InteractPressed = false;
             AimHeld = false;
-            ScanHeld = false;
-            ScanHoldTime = 0f;
-            CycleInventoryForwardPressed = false;
-            CycleInventoryBackwardPressed = false;
-            OpenInventoryPressed = false;
+            StealthToggled = false;
         }
 
         #endregion

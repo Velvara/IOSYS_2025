@@ -1,4 +1,3 @@
-using StarterAssets;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using Unity.Cinemachine;
@@ -22,7 +21,6 @@ public class AimManager : MonoBehaviour
     [Header("References")]
     public PlayerInput playerInput;
     public CycleItems cycleItems;
-    public StarterAssetsInputs starterInputs;
     public Unity.Cinemachine.CinemachineThirdPersonFollow cameraFollow;
     public HeldItemHandler heldHandler;
     public CharacterStateManager characterStateManager;
@@ -43,7 +41,7 @@ public class AimManager : MonoBehaviour
     public bool enableShootShoulderAim = true;
     public Transform rightShoulderBone; // assign in inspector
     public float shoulderAimWeight = 1f;
-    public float shoulderRotationSpeed = 5f;
+    public float shoulderRotationSpeed = 1f;
 
     private Animator animator;
     private Transform cameraTransform;
@@ -55,7 +53,7 @@ public class AimManager : MonoBehaviour
 
     // transition system
     private Coroutine transitionCoroutine;
-    [SerializeField] private float cameraTransitionDuration = 5f;
+    [SerializeField] private float cameraTransitionDuration = 1f;
 
     public float GetDefaultCamHeight() => defaultCamHeight;
     public float GetDefaultCamDist() => defaultCamDist;
@@ -313,7 +311,7 @@ public class AimManager : MonoBehaviour
             }
             else if (activeMode == shootAimMode && shootAimMode != null)
             {
-                if (shootAimMode.tpcController != null && shootAimMode.tpcController.cameraFrozen)
+                if (shootAimMode.IsCameraFrozen)
                 {
                     // While camera is frozen > no exaggerated aim
                     aimDirection = cameraTransform.forward;

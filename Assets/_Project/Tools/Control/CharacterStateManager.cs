@@ -1,86 +1,39 @@
-using StarterAssets;
 using UnityEngine;
+using Game.PlayerV2;
 
+/// <summary>
+/// Thin control arbiter that locks/unlocks the player for tool actions (e.g. firing the
+/// hookshot). Its old responsibilities — freezing movement/camera, zeroing input and the
+/// locomotion animator — are now owned by the PlayerV2 ExternalControl state, reached via
+/// <see cref="IControlLock"/>. This component only forwards the lock and pauses item cycling.
+/// </summary>
 public class CharacterStateManager : MonoBehaviour
 {
-    private StarterAssets.ThirdPersonController thirdPersonController;
-    private StarterAssetsInputs starterInputs;
-    private float frozenCameraPitch;
+    private IControlLock controlLock;
     private CycleItems cycleItems;
 
     private void Awake()
     {
-        // Get the required components on this GameObject (or its children/parent)
-        thirdPersonController =
-            GetComponent<StarterAssets.ThirdPersonController>();
-        starterInputs = GetComponent<StarterAssetsInputs>();
+        controlLock = GetComponentInParent<IControlLock>();
         cycleItems = GetComponent<CycleItems>();
 
-        if (thirdPersonController == null)
-            Debug.LogError("CharacterStateManager requires a ThirdPersonController.");
-        if (starterInputs == null)
-            Debug.LogError("CharacterStateManager requires StarterAssetsInputs.");
+        if (controlLock == null)
+            Debug.LogError("CharacterStateManager requires a PlayerV2 controller implementing IControlLock on the player hierarchy.");
     }
 
-    /// Disables TPC movement and clears input buffers.
-    /// This should be called the moment the hookshot is fired or the player is in a locked state.
+    /// Hand control to an external system (enters ExternalControl) and pause item cycling.
     public void LockCharacter()
     {
-        if (thirdPersonController != null)
-        {
-            // freeze movement and camera
-            thirdPersonController.FreezeCharacter(true, true);
-            thirdPersonController.enabled = false;
-        }
-
-        if (starterInputs != null)
-        {
-            starterInputs.MoveInput(Vector2.zero);
-            starterInputs.LookInput(Vector2.zero);
-            starterInputs.JumpInput(false);
-            starterInputs.SprintInput(false);
-            starterInputs.AimInput(false);
-        }
-
-        var animator = GetComponent<Animator>();
-        if (animator != null)
-        {
-            animator.SetFloat("Speed", 0f);
-            animator.SetFloat("MotionSpeed", 0f);
-            animator.SetFloat("AimMoveX", 0f);
-            animator.SetFloat("AimMoveY", 0f);
-        }
-
+        controlLock?.RequestExternalControl();
         if (cycleItems != null)
             cycleItems.LockCycling(true);
     }
 
+    /// Return control to the player and resume item cycling.
     public void UnlockCharacter()
     {
-        if (thirdPersonController != null)
-        {
-            thirdPersonController.enabled = true;
-            thirdPersonController.FreezeCharacter(false, false);
-        }
-        if (starterInputs != null && AimManager.Instance != null && AimManager.Instance.playerInput != null)
-        {
-            var actions = AimManager.Instance.playerInput.actions;
-            if (actions != null && actions["Move"] != null)
-            {
-                Vector2 currentMove = actions["Move"].ReadValue<Vector2>();
-                starterInputs.MoveInput(currentMove);  // restore the real stick/keys state
-            }
-
-            if (actions != null && actions["Sprint"] != null)
-            {
-                bool sprintHeld = actions["Sprint"].IsPressed();
-                starterInputs.SprintInput(sprintHeld);
-            }
-
-        }
-
+        controlLock?.ReleaseExternalControl();
         if (cycleItems != null)
             cycleItems.LockCycling(false);
     }
 }
-

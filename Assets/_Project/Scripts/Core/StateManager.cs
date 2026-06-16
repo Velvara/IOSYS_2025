@@ -1,5 +1,5 @@
+using System;
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 using Game.PlayerV2.States;
 
@@ -13,6 +13,14 @@ namespace Game.PlayerV2
         #region Fields
 
         private Dictionary<CharacterStateType, ICharacterState> _states;
+
+        // Cached, pre-sorted view of _states ordered by ascending Priority
+        // (lower number = higher priority = checked first). Rebuilt only on
+        // registration so CheckPriorityTransitions allocates nothing per frame.
+        private readonly List<ICharacterState> _statesByPriority = new List<ICharacterState>();
+        private static readonly Comparison<ICharacterState> _priorityComparison =
+            (a, b) => a.Priority.CompareTo(b.Priority);
+
         private ICharacterState _currentState;
         private StateContext _context;
 
@@ -65,7 +73,21 @@ namespace Game.PlayerV2
             }
 
             _states[state.StateType] = state;
+            RebuildPriorityOrder();
             Debug.Log($"[StateManager] Registered state: {state.StateName}");
+        }
+
+        /// <summary>
+        /// Rebuilds the priority-sorted state list. Called on registration only,
+        /// never per frame. Runtime enable/disable does not reorder (priority is
+        /// fixed per state), so SetStateEnabled does not need to call this.
+        /// </summary>
+        private void RebuildPriorityOrder()
+        {
+            _statesByPriority.Clear();
+            foreach (var state in _states.Values)
+                _statesByPriority.Add(state);
+            _statesByPriority.Sort(_priorityComparison);
         }
 
         /// <summary>
@@ -157,17 +179,17 @@ namespace Game.PlayerV2
         /// </summary>
         private void CheckPriorityTransitions()
         {
-            // Get all states sorted by priority
-            var sortedStates = _states.Values
-                .Where(s => s.IsEnabled && s.StateType != _currentState.StateType)
-                .OrderBy(s => s.Priority)
-                .ToList();
-
-            foreach (var state in sortedStates)
+            // Iterate the cached, pre-sorted (ascending priority) list. No allocation.
+            for (int i = 0; i < _statesByPriority.Count; i++)
             {
-                // Stop checking if we reach same or lower priority
+                ICharacterState state = _statesByPriority[i];
+
+                // Stop checking once we reach same or lower priority than current
                 if (state.Priority >= _currentState.Priority)
                     break;
+
+                if (!state.IsEnabled || state.StateType == _currentState.StateType)
+                    continue;
 
                 // Check if this higher priority state can be entered
                 if (state.CanEnterState(_context))
@@ -284,7 +306,13 @@ namespace Game.PlayerV2
         /// </summary>
         public bool IsInAnyState(params CharacterStateType[] stateTypes)
         {
-            return stateTypes.Contains(CurrentStateType);
+            CharacterStateType current = CurrentStateType;
+            for (int i = 0; i < stateTypes.Length; i++)
+            {
+                if (stateTypes[i] == current)
+                    return true;
+            }
+            return false;
         }
 
         #endregion

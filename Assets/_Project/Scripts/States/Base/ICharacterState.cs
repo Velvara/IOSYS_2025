@@ -1,6 +1,3 @@
-using UnityEngine;
-using Game.PlayerV2.Systems;
-
 namespace Game.PlayerV2.States
 {
     /// <summary>
@@ -76,16 +73,6 @@ namespace Game.PlayerV2.States
         /// <param name="context">The state context to evaluate</param>
         /// <returns>The state to transition to, or the current state if no transition is needed</returns>
         CharacterStateType CheckTransitions(StateContext context);
-
-        #endregion
-
-        #region Camera Methods
-
-        /// <summary>
-        /// Gets the camera settings for this state
-        /// </summary>
-        /// <returns>Camera settings to apply when in this state</returns>
-        CameraSettings GetCameraSettings();
 
         #endregion
     }

@@ -26,7 +26,10 @@ namespace Game.PlayerV2
         Interact,
         Aim,
         Scan,
-        Throw
+        Throw,
+
+        // Control
+        ExternalControl
     }
 
     /// <summary>

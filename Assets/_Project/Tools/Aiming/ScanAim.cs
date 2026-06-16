@@ -1,4 +1,3 @@
-using StarterAssets;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -6,7 +5,15 @@ public class ScanAim : AimModeBase
 {
     [Header("Input System (injected by AimManager)")]
     public PlayerInput playerInput;
-    public StarterAssetsInputs starterInputs;
+
+    // Default aim-camera framing for this mode (applied when the component is added).
+    private void Reset()
+    {
+        camHeight = 0f;
+        camDist = 1.95f;
+        camSide = 0.74f;
+        maxVerticalAngle = 75f;
+    }
 
     public override void EnterMode()
     {
@@ -30,7 +37,7 @@ public class ScanAim : AimModeBase
     {
         base.UpdateMode();
 
-        Vector2 input = starterInputs != null ? starterInputs.CurrentMoveInput : Vector2.zero;
+        Vector2 input = MoveInput;
         if (animator)
         {
             animator.SetFloat("AimMoveX", input.x);

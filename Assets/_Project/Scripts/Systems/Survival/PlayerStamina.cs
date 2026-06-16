@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace StarterAssets
+namespace Game.PlayerV2.Systems
 {
     /// <summary>
     /// Self-contained stamina, thirst, and hunger system.
@@ -49,24 +49,24 @@ namespace StarterAssets
         // -- Stamina settings --
         [Header("Stamina")]
         [Tooltip("Stamina drained per second while sprinting. ~20 /s")]
-        public float StaminaDrainRate = 20f;
+        public float StaminaDrainRate = 5f;
 
         [Tooltip("Base stamina recovered per second when not sprinting. " +
                  "Actual rate is scaled by thirst level and StaminaRecoveryRateFloorPct. ~10 /s")]
-        public float StaminaRecoveryRate = 10f;
+        public float StaminaRecoveryRate = 5f;
 
         [Tooltip("Minimum recovery rate as a percentage of StaminaRecoveryRate, reached at 0 thirst. " +
                  "Range 1-100. At 100, thirst has no effect on recovery rate.")]
         [Range(1, 100)]
-        public float StaminaRecoveryRateFloorPct = 25f;
+        public float StaminaRecoveryRateFloorPct = 10f;
 
         [Tooltip("Consecutive stamina points drained before rest-max penalty starts. " +
                  "Grace period. Resets every time sprinting stops.")]
-        public float MaxStaDrainThreshold = 10f;
+        public float MaxStaDrainThreshold = 15f;
 
         [Tooltip("Rate at which rest-max penalty accumulates per second once the grace " +
                  "period is exhausted. Independent of StaminaDrainRate. ~5 /s")]
-        public float RestMaxPenaltyRate = 5f;
+        public float RestMaxPenaltyRate = 1f;
 
         [Tooltip("Rest penalty cannot reduce effective max below this value. Default: 50.")]
         public float RestMaxStaHardFloor = 50f;
@@ -78,7 +78,7 @@ namespace StarterAssets
         // -- Thirst settings --
         [Header("Thirst")]
         [Tooltip("Thirst lost per second passively. ~1 /s")]
-        public float ThirstDrainRate = 1f;
+        public float ThirstDrainRate = 0.24f;
 
         [Tooltip("Thirst restored per second when debug drink is held. ~25 /s")]
         public float ThirstRestoreRate = 25f;
@@ -86,7 +86,7 @@ namespace StarterAssets
         // -- Hunger settings --
         [Header("Hunger")]
         [Tooltip("Hunger lost per second passively. ~0.5 /s")]
-        public float HungerDrainRate = 0.5f;
+        public float HungerDrainRate = 0.144f;
 
         [Tooltip("Maximum total hunger-based max-stamina penalty. " +
                  "Hunger penalty stops growing once this is reached. Default: 25.")]
@@ -94,13 +94,13 @@ namespace StarterAssets
 
         [Tooltip("Rate at which the hunger-based max-stamina penalty grows per second " +
                  "once the hunger bar is empty. ~2 /s")]
-        public float HungerMaxDrainRate = 2f;
+        public float HungerMaxDrainRate = 0.25f;
 
         [Tooltip("Hunger restored per second when debug eat is held. ~25 /s")]
         public float HungerRestoreRate = 25f;
 
         [Tooltip("Hunger-based max-stamina penalty removed per second when debug eat is held. ~10 /s")]
-        public float HungerMaxRestoreRate = 10f;
+        public float HungerMaxRestoreRate = 25f;
 
         // -- Debug drain rates --
         [Header("Debug Drain Rates")]

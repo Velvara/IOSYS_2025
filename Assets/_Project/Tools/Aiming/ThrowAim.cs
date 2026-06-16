@@ -1,4 +1,3 @@
-using StarterAssets;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -12,7 +11,6 @@ public class ThrowAim : AimModeBase
     public float throwForceLookMultiplier = 1.5f;
     public AnimationCurve throwForceCurve = AnimationCurve.Linear(0f, 0f, 90f, 1f);
     public string throwTriggerName = "Throw";
-    public StarterAssetsInputs starterInputs;
     private float _currentCalculatedThrowForce;
 
     [Header("Input System (injected by AimManager)")]
@@ -22,6 +20,15 @@ public class ThrowAim : AimModeBase
     private bool isThrowCooldown = false;
 
     private HeldItemHandler heldHandler = new HeldItemHandler();
+
+    // Default aim-camera framing for this mode (applied when the component is added).
+    private void Reset()
+    {
+        camHeight = 0.21f;
+        camDist = 1.22f;
+        camSide = 0.9f;
+        maxVerticalAngle = 75f;
+    }
 
     public override void EnterMode()
     {
@@ -54,7 +61,7 @@ public class ThrowAim : AimModeBase
             trajectory.DrawTrajectory(_currentCalculatedThrowForce, aimDirection.forward);
         }
 
-        Vector2 input = starterInputs != null ? starterInputs.CurrentMoveInput : Vector2.zero;
+        Vector2 input = MoveInput;
         if (animator)
         {
             animator.SetFloat("AimMoveX", input.x);
