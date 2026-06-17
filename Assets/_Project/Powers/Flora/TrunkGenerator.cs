@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using Game.Core.Climbing;
 
 [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer))]
 public class TrunkGenerator : MonoBehaviour
@@ -48,6 +49,12 @@ public class TrunkGenerator : MonoBehaviour
     [Header("Growth Collision Settings")]
     public bool useGrowthColliders = true;
     private List<CapsuleCollider> growthColliders = new List<CapsuleCollider>();
+
+    [Header("Climbing")]
+    [Tooltip("Climb holds are NOT emitted on rings thinner than this radius (m), so the player " +
+             "can't grab the twiggy taper near the tip. Only used if a ClimbableSurface (or any " +
+             "IClimbableMeshConsumer) is present on this object.")]
+    public float minClimbableRingRadius = 0.25f;
 
     [Header("Custom Tag System")]
     public Tags lightSourceTag;
@@ -538,8 +545,67 @@ public class TrunkGenerator : MonoBehaviour
         // Mark as static for batching/lightmaps
         gameObject.isStatic = true;
 
+        // Emit climb holds from the final ring lattice (only if this trunk is climbable, i.e. has
+        // a ClimbableSurface / IClimbableMeshConsumer). Must run BEFORE Destroy(this).
+        EmitClimbHolds();
+
         //Destroy Script
         Destroy(this);
+    }
+
+    /// <summary>
+    /// Builds climb holds from the final ring lattice and pushes them to a ClimbableSurface on this
+    /// object via the Game.Core <see cref="IClimbableMeshConsumer"/> contract (no Game.Climbing
+    /// reference). A trunk is a smooth tube, so the ledge parser finds nothing — instead each ring
+    /// vertex above <see cref="minClimbableRingRadius"/> becomes a hold (outward radial = grab
+    /// normal, along-trunk = up). No-op if the object has no climbable consumer.
+    /// </summary>
+    private void EmitClimbHolds()
+    {
+        var consumer = GetComponent<IClimbableMeshConsumer>();
+        if (consumer == null) return;
+        if (segmentRings == null || segmentRings.Count == 0) return;
+
+        int ringCount = segmentRings.Count;
+        var holds = new List<ClimbHoldData>(ringCount * Mathf.Max(1, ringVertices));
+
+        for (int r = 0; r < ringCount; r++)
+        {
+            Vector3[] ring = segmentRings[r];
+            if (ring == null || ring.Length == 0) continue;
+            Vector3 center = segmentPoints[r];
+
+            // Skip the twiggy taper near the tip so the player can't grab a sliver.
+            float radius = (ring[0] - center).magnitude;
+            if (radius < minClimbableRingRadius) continue;
+
+            // "Up" = along the trunk at this ring (toward the next segment).
+            Vector3 up;
+            if (r < segmentPoints.Count - 1) up = segmentPoints[r + 1] - segmentPoints[r];
+            else if (r > 0) up = segmentPoints[r] - segmentPoints[r - 1];
+            else up = transform.up;
+            up = up.sqrMagnitude > 1e-6f ? up.normalized : Vector3.up;
+
+            for (int i = 0; i < ring.Length; i++)
+            {
+                Vector3 worldPos = ring[i];
+                Vector3 outward = worldPos - center;
+                outward = outward.sqrMagnitude > 1e-6f ? outward.normalized : transform.forward;
+
+                Quaternion worldRot = Quaternion.LookRotation(outward, up);
+
+                holds.Add(new ClimbHoldData
+                {
+                    LocalPosition = transform.InverseTransformPoint(worldPos),
+                    LocalRotation = Quaternion.Inverse(transform.rotation) * worldRot,
+                    RiskValue = 0f,   // trunks carry no vertex paint; resolves to fallback risk later
+                    IconId = 0
+                });
+            }
+        }
+
+        consumer.ReceiveHolds(holds);
+        Debug.Log($"[TrunkGenerator] Emitted {holds.Count} climb holds from {ringCount} rings.");
     }
 
     private void CreateGrowthColliders()

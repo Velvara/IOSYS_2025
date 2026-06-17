@@ -199,6 +199,11 @@ public class HookshotDragMode : AimModeBase
                 Vector3.up);
 
             motor.RotateOnMove = true;
+
+            // Kill any stale vertical velocity carried from before the drag (the motor wasn't
+            // ticked during external control) so locomotion resumes from rest — a clean fall
+            // instead of inheriting old momentum and dropping oddly off the hook trajectory.
+            motor.SetVerticalVelocity(0f);
         }
 
         _controlLock?.ReleaseExternalControl(); // <-- Return control LAST

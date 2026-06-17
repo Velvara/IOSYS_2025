@@ -13,6 +13,7 @@ GameObject:
   - component: {fileID: 7254168652722806380}
   - component: {fileID: 3894861258990530497}
   - component: {fileID: 2174738831703988678}
+  - component: {fileID: -4142888454814054879}
   m_Layer: 8
   m_Name: Trunk
   m_TagString: Untagged
@@ -67,11 +68,11 @@ MonoBehaviour:
     m_Bits: 256
   lightSearchRadius: 40
   timeToRot: 2
-  ringRadius: 0.6
-  segmentLength: 1
+  ringRadius: 0.8
+  segmentLength: 0.4
   segmentRetries: 6
-  segmentAmount: 20
-  ringVertices: 8
+  segmentAmount: 40
+  ringVertices: 12
   minRingRadius: 0.1
   taperCurve:
     serializedVersion: 2
@@ -122,8 +123,8 @@ MonoBehaviour:
       inWeight: 0.33333334
       outWeight: 0.33333334
     - serializedVersion: 3
-      time: 0.36285773
-      value: 0.18719824
+      time: 0.3602027
+      value: 0.18078955
       inSlope: 1.3186008
       outSlope: 1.3186008
       tangentMode: 0
@@ -131,8 +132,8 @@ MonoBehaviour:
       inWeight: 0.33333334
       outWeight: 0.33333334
     - serializedVersion: 3
-      time: 0.38588622
-      value: 0.29523268
+      time: 0.38854125
+      value: 0.3101863
       inSlope: 1.410291
       outSlope: 1.410291
       tangentMode: 0
@@ -203,8 +204,8 @@ MonoBehaviour:
       inWeight: 0.33333334
       outWeight: 0.33333334
     - serializedVersion: 3
-      time: 0.8604144
-      value: 0.65815276
+      time: 0.87368953
+      value: 0.6090042
       inSlope: 1.0060065
       outSlope: 1.0060065
       tangentMode: 0
@@ -232,10 +233,10 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
-  screwStrength: 0.3
-  maxScrewTurns: 3
-  noiseFrequency: 0.5
-  noiseStrength: 0.5
+  screwStrength: 0.2
+  maxScrewTurns: 2.13
+  noiseFrequency: 0.72
+  noiseStrength: 0.69
   stiffInfluence: 1
   trunkMaterial: {fileID: 2100000, guid: a8a94ba5c47063e4490cfd53d0358176, type: 2}
   growthDuration: 3
@@ -265,6 +266,7 @@ MonoBehaviour:
     m_PostInfinity: 2
     m_RotationOrder: 4
   useGrowthColliders: 1
+  minClimbableRingRadius: 0.25
   lightSourceTag: {fileID: 11400000, guid: d394543cee94b4a4297f02fc69881550, type: 2}
 --- !u!33 &3894861258990530497
 MeshFilter:
@@ -321,4 +323,24 @@ MeshRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
+  m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
+--- !u!114 &-4142888454814054879
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7829581425871931375}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7340aecd0ad91ab4292cea289584f58c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Game.Climbing::Game.Climbing.ClimbableSurface
+  holdData: {fileID: 0}
+  fallbackRisk: 0.05
+  alwaysDry: 0
+  redRisk: 0.5
+  greenRisk: 0.1
+  blueRisk: 0.25
+  searchRadius: 12

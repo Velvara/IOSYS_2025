@@ -65,6 +65,10 @@ namespace Game.PlayerV2
         private float _fallTimeoutDelta;
         private Vector3 _moveDirection = Vector3.forward;
 
+        // -- Decaying horizontal launch (e.g. climb jump-off), additive on top of input movement --
+        private Vector3 _launchVelocity;
+        private float _launchDecayRate;
+
         // -- Animator hash IDs --
         private readonly int _hSpeed, _hMotionSpeed, _hGrounded, _hJump, _hFreeFall, _hSprint, _hFatigued, _hStealth;
         // change-cached bools (SetBool only on change, like TPC)
@@ -188,6 +192,22 @@ namespace Game.PlayerV2
             }
         }
 
+        /// <summary>Sets vertical velocity directly (climb jump-off impulse / zeroed exit).</summary>
+        public void SetVerticalVelocity(float v) => _verticalVelocity = v;
+
+        /// <summary>
+        /// Adds a decaying horizontal launch velocity, applied additively on top of input-driven
+        /// movement and decayed toward zero each frame (see <see cref="ApplyMove"/>). Used for a
+        /// climb jump-off that arcs away from the wall before blending back to normal air control.
+        /// Zero unless set, so ordinary locomotion is unaffected.
+        /// </summary>
+        public void AddLaunchVelocity(Vector3 horizontalWorld, float decayRate)
+        {
+            horizontalWorld.y = 0f;
+            _launchVelocity = horizontalWorld;
+            _launchDecayRate = Mathf.Max(0.01f, decayRate);
+        }
+
         private void MoveHorizontal(Vector2 moveInput, float targetSpeed, bool ignoreStickScaling, float dt)
         {
             if (moveInput == Vector2.zero) targetSpeed = 0f;
@@ -254,7 +274,12 @@ namespace Game.PlayerV2
         private void ApplyMove(float dt)
         {
             _controller.Move(_moveDirection.normalized * (_speed * dt) +
+                             _launchVelocity * dt +
                              new Vector3(0f, _verticalVelocity, 0f) * dt);
+
+            // Decay the launch impulse toward zero so air control blends back to normal.
+            if (_launchVelocity != Vector3.zero)
+                _launchVelocity = Vector3.MoveTowards(_launchVelocity, Vector3.zero, _launchDecayRate * dt);
         }
     }
 }

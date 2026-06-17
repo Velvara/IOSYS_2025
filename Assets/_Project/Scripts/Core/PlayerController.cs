@@ -101,6 +101,12 @@ namespace Game.PlayerV2
         public Transform Transform => transform;
         public CharacterController Controller => _characterController;
 
+        // Motor velocity surface (used by external systems like climbing for exit/jump-off).
+        public float VerticalVelocity => _motor != null ? _motor.VerticalVelocity : 0f;
+        public void SetVerticalVelocity(float v) => _motor?.SetVerticalVelocity(v);
+        public void AddLaunchVelocity(Vector3 horizontalWorld, float decayRate) =>
+            _motor?.AddLaunchVelocity(horizontalWorld, decayRate);
+
         // ── IControlLock ─────────────────────────────────────────────────────
         // External systems (hookshot drag, cutscenes) call these to take/return control.
         // While active, the state machine sits in ExternalControl (no locomotion/look).

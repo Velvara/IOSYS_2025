@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using Game.PlayerV2;
 
 public class CycleItems : MonoBehaviour
 {
@@ -17,9 +18,12 @@ public class CycleItems : MonoBehaviour
     public GameObject currentPrefab;
 
     private bool cyclingLocked = false;
+    private IControlLock controlLock;
 
     void Start()
     {
+        controlLock = GetComponentInParent<IControlLock>();
+
         if (prefabs.Count > 0)
         {
             currentPrefab = prefabs[0];
@@ -37,9 +41,9 @@ public class CycleItems : MonoBehaviour
             if (actions != null)
             {
                 if (actions["Next Item"] != null)
-                    actions["Next Item"].performed += ctx => { if (!cyclingLocked) CycleNext(); };
+                    actions["Next Item"].performed += ctx => { if (CanCycle()) CycleNext(); };
                 if (actions["Previous Item"] != null)
-                    actions["Previous Item"].performed += ctx => { if (!cyclingLocked) CyclePrevious(); };
+                    actions["Previous Item"].performed += ctx => { if (CanCycle()) CyclePrevious(); };
             }
         }
         else
@@ -54,6 +58,15 @@ public class CycleItems : MonoBehaviour
     public void LockCycling(bool locked)
     {
         cyclingLocked = locked;
+    }
+
+    /// <summary>
+    /// Cycling is allowed when not explicitly locked AND no external system (climbing, cutscene,
+    /// hookshot drag) holds control of the character.
+    /// </summary>
+    private bool CanCycle()
+    {
+        return !cyclingLocked && (controlLock == null || !controlLock.IsExternalControlActive);
     }
 
     private void CycleNext()

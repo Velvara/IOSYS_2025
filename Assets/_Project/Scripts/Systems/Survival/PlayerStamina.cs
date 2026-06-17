@@ -102,6 +102,12 @@ namespace Game.PlayerV2.Systems
         [Tooltip("Hunger-based max-stamina penalty removed per second when debug eat is held. ~10 /s")]
         public float HungerMaxRestoreRate = 25f;
 
+        // -- Climbing settings --
+        [Header("Climbing")]
+        [Tooltip("Stamina drained per second while climbing AND moving between holds. " +
+                 "No drain while hanging still; no recovery while climbing. ~25 /s")]
+        public float ClimbDrainRate = 25f;
+
         // -- Debug drain rates --
         [Header("Debug Drain Rates")]
         [Tooltip("Stamina drained per second by DEBUG_J. ~50 /s")]
@@ -155,6 +161,10 @@ namespace Game.PlayerV2.Systems
         private bool _isFatigued;
         private bool _isAccumulatingRestPenalty;
 
+        // -- Climbing state (set each frame by the climbing subsystem) --
+        private bool _isClimbing;
+        private bool _isMovingBetweenHolds;
+
         // -- Lifecycle --
 
         private void Start()
@@ -180,6 +190,18 @@ namespace Game.PlayerV2.Systems
             ClampAll();
         }
 
+        /// <summary>
+        /// Driven each frame by the climbing subsystem while a climb is active. While climbing,
+        /// stamina never recovers; it drains at <see cref="ClimbDrainRate"/> only while moving
+        /// between holds. Reaching 0 sets <see cref="IsFatigued"/>, which climbing reads to trigger
+        /// an auto-tumble. Pass climbing=false (the default state) to restore normal behaviour.
+        /// </summary>
+        public void SetClimbState(bool climbing, bool movingBetweenHolds)
+        {
+            _isClimbing = climbing;
+            _isMovingBetweenHolds = movingBetweenHolds;
+        }
+
         private void UpdateCurrentRecoveryRate()
         {
             float floorFraction  = StaminaRecoveryRateFloorPct / 100f;
@@ -196,17 +218,32 @@ namespace Game.PlayerV2.Systems
             if (_currentHunger <= 0f)
                 _hungerMaxPenalty += HungerMaxDrainRate * dt;
 
-            // -- Future stamina-draining states go here --
-            // Add a public float drain-rate field in the [Header("Stamina")] block
-            // for each state, then add its drain below. Examples:
-            //
+            // -- Future stamina-draining states --
+            // Climbing drain is handled in TickStamina (see SetClimbState / ClimbDrainRate).
+            // Add other state drains the same way (own field + branch), e.g.:
             //   Swimming  (~15 /s):  _currentStamina -= SwimDrainRate  * dt;
-            //   Climbing  (~25 /s):  _currentStamina -= ClimbDrainRate * dt;
             //   Holding breath (~30 /s): _currentStamina -= HoldBreathDrainRate * dt;
         }
 
         private void TickStamina(bool isSprinting, float dt)
         {
+            // Climbing overrides sprint: drain only while moving between holds, and never recover
+            // (fatigue clears only after leaving the wall). Reaching 0 sets fatigue → auto-tumble.
+            if (_isClimbing)
+            {
+                _staminaSpentAccumulator   = 0f;
+                _currentSessionPenalty     = 0f;
+                _isAccumulatingRestPenalty = false;
+
+                if (_isMovingBetweenHolds && !_isFatigued && _currentStamina > 0f)
+                {
+                    _currentStamina -= ClimbDrainRate * dt;
+                    if (_currentStamina <= 0f)
+                        _isFatigued = true;
+                }
+                return;
+            }
+
             if (isSprinting && !_isFatigued && _currentStamina > 0f)
             {
                 float drain = StaminaDrainRate * dt;

@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using Unity.Cinemachine;
 using System.Collections;
+using Game.PlayerV2;
 
 [RequireComponent(typeof(PlayerInput))]
 public class AimManager : MonoBehaviour
@@ -51,6 +52,10 @@ public class AimManager : MonoBehaviour
     public AimModeBase ActiveMode => activeMode; // expose for checks
     private bool isAiming = false;
 
+    // Resolved from the player hierarchy. While an external system (climbing, cutscene) holds
+    // control, aiming is blocked / dropped so tool IK doesn't fight the external system.
+    private IControlLock controlLock;
+
     // transition system
     private Coroutine transitionCoroutine;
     [SerializeField] private float cameraTransitionDuration = 1f;
@@ -76,6 +81,8 @@ public class AimManager : MonoBehaviour
     void Start()
     {
         hookshotDragMode = GetComponent<HookshotDragMode>();
+
+        controlLock = GetComponentInParent<IControlLock>();
 
         if (playerInput == null)
             playerInput = GetComponent<PlayerInput>();
@@ -116,6 +123,16 @@ public class AimManager : MonoBehaviour
 
     void Update()
     {
+        // If an external system (climbing, cutscene) took control while aiming, drop aim — but
+        // NOT for the hookshot drag, which is itself the external controller. Does not release
+        // the control lock (the external system owns it).
+        if (isAiming && activeMode != hookshotDragMode && !isHookshotFiring &&
+            controlLock != null && controlLock.IsExternalControlActive)
+        {
+            CancelAimForExternalControl();
+            return;
+        }
+
         if (isAiming && activeMode != null)
             activeMode.UpdateMode();
     }
@@ -127,6 +144,10 @@ public class AimManager : MonoBehaviour
             Debug.Log("Aim Performed ignored during drag.");
             return;
         }
+
+        // Block starting aim while an external system holds control (climbing, cutscene).
+        if (controlLock != null && controlLock.IsExternalControlActive)
+            return;
 
         isAiming = true;
         ChooseModeByCurrentItem();
@@ -169,6 +190,19 @@ public class AimManager : MonoBehaviour
         activeMode = null;
 
         characterStateManager?.UnlockCharacter();
+    }
+
+    /// <summary>
+    /// Drops the active aim mode because an external system (e.g. climbing) has taken control.
+    /// Unlike <see cref="ForceAimExit"/>, it does NOT release the control lock or unlock cycling —
+    /// the external system owns the lock and will release it on exit.
+    /// </summary>
+    private void CancelAimForExternalControl()
+    {
+        isAiming = false;
+        activeMode?.ExitMode();
+        activeMode = null;
+        RequestCameraTransition(defaultCamHeight, defaultCamDist, defaultCamSide);
     }
 
 
