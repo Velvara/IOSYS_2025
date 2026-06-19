@@ -2663,6 +2663,18 @@ PrefabInstance:
     m_TransformParent: {fileID: 0}
     m_Modifications:
     - target: {fileID: 333516578530407017, guid: a1a802ecaf6775746bb2a929fb554ad8, type: 3}
+      propertyPath: Damping.x
+      value: 0.3
+      objectReference: {fileID: 0}
+    - target: {fileID: 333516578530407017, guid: a1a802ecaf6775746bb2a929fb554ad8, type: 3}
+      propertyPath: Damping.y
+      value: 0.45
+      objectReference: {fileID: 0}
+    - target: {fileID: 333516578530407017, guid: a1a802ecaf6775746bb2a929fb554ad8, type: 3}
+      propertyPath: Damping.z
+      value: 0.5
+      objectReference: {fileID: 0}
+    - target: {fileID: 333516578530407017, guid: a1a802ecaf6775746bb2a929fb554ad8, type: 3}
       propertyPath: VerticalArmLength
       value: 0
       objectReference: {fileID: 0}
@@ -3478,8 +3490,8 @@ MonoBehaviour:
   ikFadeInDuration: 0.15
   ikFadeOutDuration: 0.15
   shoulderWidth: 0.45
-  rootForwardOffset: 0.35
-  rootDownOffset: 1.4
+  rootForwardOffset: 0.55
+  rootDownOffset: 0.9
   enableLean: 0
   bodyOrientSpeed: 10
   leftHandGripRotation: {x: 0, y: 180, z: 0}
@@ -3487,7 +3499,7 @@ MonoBehaviour:
   elbowBendWeight: 1
   elbowOutward: 0.5
   traverseStep: 0.4
-  traverseMoveDuration: 0.28
+  traverseMoveDuration: 0.38
   minMoveInput: 0.5
   moveInterval: 0.08
   minStepDistance: 0.15
@@ -3496,7 +3508,7 @@ MonoBehaviour:
   facingCoherence: 0.35
   progressDot: 0.25
   crossMargin: 0.12
-  maxHandSeparation: 0.7
+  maxHandSeparation: 0.9
   climbableLayers:
     serializedVersion: 2
     m_Bits: 7991
@@ -3505,7 +3517,7 @@ MonoBehaviour:
   detectHeightOffset: 1
   maxGrabAngle: 80
   minWallAngle: 45
-  poseCrossFade: 0.2
+  freeHangBlendSpeed: 4
   freeHangEnterDot: -0.5
   freeHangExitDot: -0.4
   hipDropFromHands: 0.9
@@ -3547,6 +3559,21 @@ MonoBehaviour:
   footToeSide: 0.5
   footPlantRotation: {x: 0, y: 0, z: 137.4}
   footPlantMirror: {x: -1, y: 1, z: 1}
+  trunkAxisDepth: 0.5
+  enableFootLock: 1
+  footLockEnter: 0.6
+  footLockExit: 0.35
+  footLockBreak: 0.35
+  footSmoothSpeed: 15
+  usePendulum: 1
+  pendulumWeight: 1
+  pendulumStiffness: 120
+  pendulumDamping: 8
+  pendulumStepHz: 120
+  spineBone: {fileID: 0}
+  spineSwingWeight: 0.5
+  spineBoneLower: {fileID: 0}
+  spineLowerShare: 0.5
   enableDebugToggle: 1
   debugToggleKey: 17
 --- !u!114 &4416926083347132241 stripped

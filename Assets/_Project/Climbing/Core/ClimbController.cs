@@ -197,6 +197,31 @@ namespace Game.Climbing
         [SerializeField] private float footLockExit = 0.35f;
         [Tooltip("A locked foot also UNLOCKS once the animated (clip) foot has moved this far from the lock — so feet re-plant as the body climbs past instead of pinning for a long time. LOWER = feet step more often.")]
         [SerializeField] private float footLockBreak = 0.35f;
+        [Tooltip("How fast each foot eases toward its IK target — LOWER = smoother (less snappy plant/lift/re-plant), HIGHER = snappier/more exact. The main dial for snappy feet.")]
+        [SerializeField] private float footSmoothSpeed = 15f;
+
+        [Header("Two-Mass Pendulum (EXPERIMENT — body hang/swing)")]
+        [Tooltip("Replace the rigid body drop with a two-mass pendulum hanging from the hands, so the body hangs and swings as you move. OFF = rigid placement (restore-point behaviour).")]
+        [SerializeField] private bool usePendulum = true;
+        [Tooltip("How much the pendulum replaces the rigid body position (0 = rigid, 1 = full pendulum swing).")]
+        [Range(0f, 1f)]
+        [SerializeField] private float pendulumWeight = 1f;
+        [Tooltip("Pendulum spring stiffness (higher = stiffer, snaps back faster).")]
+        [SerializeField] private float pendulumStiffness = 160f;
+        [Tooltip("Pendulum damping (higher = settles faster, less swing). Raise if it jitters or blows up.")]
+        [SerializeField] private float pendulumDamping = 6f;
+        [Tooltip("Fixed sub-step rate (Hz) for the pendulum sim — makes the swing frame-rate independent and stable. Higher = finer.")]
+        [SerializeField] private float pendulumStepHz = 120f;
+        [Tooltip("Chest/upper-spine bone the pendulum's upper-mass swing leans. Leave empty to auto-use the humanoid Chest (then Spine).")]
+        [SerializeField] private Transform spineBone;
+        [Tooltip("How much the chest/spine leans with the pendulum's upper-mass swing (article uses ~0.5). 0 = no spine twist.")]
+        [Range(0f, 1f)]
+        [SerializeField] private float spineSwingWeight = 0.5f;
+        [Tooltip("Optional second (lower) spine bone to spread the lean across for a smoother bend. Leave empty to auto-use the humanoid Spine; none = single-bone twist.")]
+        [SerializeField] private Transform spineBoneLower;
+        [Tooltip("Share of the lean applied at the LOWER spine bone vs the chest (0.5 = even). Only used when a lower spine bone is set.")]
+        [Range(0f, 1f)]
+        [SerializeField] private float spineLowerShare = 0.5f;
 
         [Header("Debug (skeleton test)")]
         [Tooltip("Allow toggling a climb takeover with the debug key — for verifying enter/exit only.")]
@@ -226,6 +251,9 @@ namespace Game.Climbing
         private bool _lFootLocked, _rFootLocked;
         private Vector3 _lFootLockPos, _rFootLockPos;
         private Quaternion _lFootLockRot = Quaternion.identity, _rFootLockRot = Quaternion.identity;
+        private readonly Vector3[] _footSmoothPos = new Vector3[2];
+        private readonly Quaternion[] _footSmoothRot = { Quaternion.identity, Quaternion.identity };
+        private readonly bool[] _footSmoothInit = new bool[2];
         private static readonly int _hClimbMoveX = Animator.StringToHash("ClimbMoveX");
         private static readonly int _hClimbMoveY = Animator.StringToHash("ClimbMoveY");
 
@@ -260,6 +288,7 @@ namespace Game.Climbing
 
         // -- Torso standoff (smoothed outward push to keep the body off the surface) --
         private float _standoffPush;
+        private float _pendulumAccumulator;   // fixed-step accumulator for the body pendulum sim
 
         private void Awake()
         {
@@ -277,6 +306,12 @@ namespace Game.Climbing
                 if (_climbLayerIndex < 0)
                     Debug.LogError("[ClimbController] Animator has no 'ClimbingLayer' — climb pose won't show.");
                 _climbLegsLayerIndex = _animator.GetLayerIndex("ClimbLegsLayer");   // optional (animated legs)
+                if (spineBone == null && _animator.isHuman)
+                    spineBone = _animator.GetBoneTransform(HumanBodyBones.Chest)
+                                ?? _animator.GetBoneTransform(HumanBodyBones.Spine);
+                if (spineBoneLower == null && _animator.isHuman)
+                    spineBoneLower = _animator.GetBoneTransform(HumanBodyBones.Spine);
+                if (spineBoneLower == spineBone) spineBoneLower = null;   // need two distinct bones to spread
             }
             else
             {
@@ -303,7 +338,8 @@ namespace Game.Climbing
         {
             if (!_smearHooked && ik != null && ik.solver != null)
             {
-                ik.solver.OnPreUpdate += SmearFeet;
+                ik.solver.OnPreUpdate += SmearFeet;     // read animated feet → cast → set effectors
+                ik.solver.OnPostUpdate += TwistSpine;   // lean the chest after the solve (final override)
                 _smearHooked = true;
             }
         }
@@ -313,6 +349,7 @@ namespace Game.Climbing
             if (_smearHooked && ik != null && ik.solver != null)
             {
                 ik.solver.OnPreUpdate -= SmearFeet;
+                ik.solver.OnPostUpdate -= TwistSpine;
                 _smearHooked = false;
             }
         }
@@ -441,10 +478,13 @@ namespace Game.Climbing
             _standoffPush = 0f;
             _legBlend = Vector2.zero;
             _lFootLocked = _rFootLocked = false;
+            _footSmoothInit[0] = _footSmoothInit[1] = false;
+            _pendulumAccumulator = 0f;
             ApplyGripOffset();
 
-            UpdateBodyPose(instant: true);
+            ConfigurePendulum();
             _pendulum?.Reset(_rig.HandAverage);
+            UpdateBodyPose(instant: true);
 
             // Seed the feet under the hips (dangling, weight 0) so the first plant steps in from a sane
             // spot instead of swooping from the world origin.
@@ -516,6 +556,7 @@ namespace Game.Climbing
             SetLegBendDirections(Mathf.Max(_lFootWeight, _rFootWeight) * kneeBendWeight);
 
             _rig.Tick(dt);
+            StepPendulum(dt);
             UpdateBodyPose();
 
             _stamina?.SetClimbState(true, _rig.AnyMoving);
@@ -564,11 +605,71 @@ namespace Game.Climbing
                     transform.rotation = Quaternion.LookRotation(intoFlat.normalized, Vector3.up);
             }
 
-            transform.position = _rig.HandAverage + avgOut * rootForwardOffset - Vector3.up * rootDownOffset;
+            // Rigid hang (restore-point) vs pendulum hang (experiment): the pendulum's lower mass swings
+            // below the hands as the anchor (hands) moves, so the body lags/sways instead of snapping.
+            Vector3 rigidPos = _rig.HandAverage + avgOut * rootForwardOffset - Vector3.up * rootDownOffset;
+            transform.position = usePendulum && _pendulum != null
+                ? Vector3.Lerp(rigidPos, _pendulum.LowerPos + avgOut * rootForwardOffset, pendulumWeight)
+                : rigidPos;
 
             // Torso standoff push — gated by `enableStandoff`: OFF = no push (current behaviour, body can
             // clip the trunk); ON = push the body off the surface as before. Toggle in the inspector to compare.
             ApplyStandoff(avgOut, instant);
+        }
+
+        /// <summary>Sets the pendulum's tuning + segment lengths so its rest matches the rigid body drop.</summary>
+        private void ConfigurePendulum()
+        {
+            if (_pendulum == null) return;
+            _pendulum.Stiffness = pendulumStiffness;
+            _pendulum.Damping = pendulumDamping;
+            _pendulum.AnchorToUpper = _pendulum.UpperToLower = rootDownOffset * 0.5f;  // rest = rigid drop
+        }
+
+        /// <summary>Advances the body pendulum one step, anchored to the live hand-average.</summary>
+        private void StepPendulum(float dt)
+        {
+            if (!usePendulum || _pendulum == null) return;
+            ConfigurePendulum();                 // live-tunable
+            _pendulum.SetAnchor(_rig.HandAverage);
+
+            // Fixed-timestep sub-stepping so the swing is frame-rate independent + stable (better than a
+            // literal FixedUpdate, which would quantize the visual). Safety cap avoids a spiral of death.
+            float fixedStep = 1f / Mathf.Max(1f, pendulumStepHz);
+            _pendulumAccumulator += dt;
+            int safety = 0;
+            while (_pendulumAccumulator >= fixedStep && safety++ < 8)
+            {
+                _pendulum.Step(fixedStep);
+                _pendulumAccumulator -= fixedStep;
+            }
+        }
+
+        /// <summary>
+        /// Leans the chest/spine bone with the pendulum's upper-mass swing (article's mass2 → spine).
+        /// Runs as FinalIK's POST-solve callback so it overrides the final pose. The upper segment's
+        /// deviation from straight-down is applied to the spine as a world-space lean, scaled by weight
+        /// and the climb fade. At rest the swing is identity (no change).
+        /// </summary>
+        private void TwistSpine()
+        {
+            if (!_isClimbing || !usePendulum || _pendulum == null || spineBone == null || _rig == null) return;
+            float w = spineSwingWeight * _rig.MasterWeight;
+            if (w <= 0.001f) return;
+
+            Quaternion swing = Quaternion.FromToRotation(Vector3.down, _pendulum.UpperDir);
+
+            if (spineBoneLower != null)
+            {
+                // Spread the lean across two joints for a smoother bend. Apply the lower bone FIRST — the
+                // chest inherits it, so the two partial leans compose to ~the full swing, distributed.
+                spineBoneLower.rotation = Quaternion.Slerp(Quaternion.identity, swing, w * spineLowerShare) * spineBoneLower.rotation;
+                spineBone.rotation = Quaternion.Slerp(Quaternion.identity, swing, w * (1f - spineLowerShare)) * spineBone.rotation;
+            }
+            else
+            {
+                spineBone.rotation = Quaternion.Slerp(Quaternion.identity, swing, w) * spineBone.rotation;
+            }
         }
 
         /// <summary>
@@ -736,6 +837,7 @@ namespace Game.Climbing
         private void SmearFoot(IKEffector eff, float sideSign, ref bool locked, ref Vector3 lockPos, ref Quaternion lockRot)
         {
             if (eff == null || eff.bone == null) return;
+            int idx = sideSign < 0f ? 0 : 1;
 
             Vector3 outward = AvgOutward();
             Vector3 footPos = eff.bone.position;                 // animator-posed foot (pre-solve)
@@ -755,46 +857,50 @@ namespace Game.Climbing
             float contactDist = hasHit ? hit.distance - footSmearBackup : float.MaxValue;
             float stance = 1f - Mathf.Clamp01(Mathf.InverseLerp(footContactNear, footContactFar, contactDist));
 
-            // Locked stance: hold the captured plant in world space (no skating / no re-twist) until the
-            // clip lifts the foot (stance drops below the exit threshold).
-            if (enableFootLock && locked)
+            // Pick this frame's target pose + weights: hold the lock, take a fresh plant, or follow the clip.
+            Vector3 targetPos;
+            Quaternion targetRot;
+            float posW, rotW;
+
+            bool holdingLock = enableFootLock && locked && stance >= footLockExit &&
+                               (eff.bone.position - lockPos).sqrMagnitude < footLockBreak * footLockBreak;
+            if (holdingLock)
             {
-                // Hold only while the clip foot is still down (stance) AND hasn't moved far from the lock.
-                // The drift break re-plants feet as the body climbs past, so they don't pin for a long time.
-                if (stance >= footLockExit &&
-                    (eff.bone.position - lockPos).sqrMagnitude < footLockBreak * footLockBreak)
-                {
-                    eff.position = lockPos;
-                    eff.rotation = lockRot;
-                    eff.positionWeight = w;
-                    eff.rotationWeight = w * footSmearRotWeight;
-                    return;
-                }
+                targetPos = lockPos;
+                targetRot = lockRot;
+                posW = w;
+                rotW = w * footSmearRotWeight;
+            }
+            else
+            {
                 locked = false;   // foot lifted (clip) or body climbed past → re-plant
+                if (hasHit)
+                {
+                    targetPos = hit.point + hit.normal * footSmearSurfaceOffset;
+                    targetRot = PlantRotation(hit.normal, sideSign, eff.bone.rotation);
+                    posW = w * stance;
+                    rotW = w * stance * footSmearRotWeight;
+                    if (enableFootLock && stance > footLockEnter) { locked = true; lockPos = targetPos; lockRot = targetRot; }
+                }
+                else
+                {
+                    targetPos = _footSmoothPos[idx];   // hold last (weight 0 → no visible effect / no swoop)
+                    targetRot = _footSmoothRot[idx];
+                    posW = 0f;
+                    rotW = 0f;
+                }
             }
 
-            if (!hasHit)
-            {
-                eff.positionWeight = 0f;
-                eff.rotationWeight = 0f;
-                return;
-            }
+            // Ease the IK target so plant / lift / lock-break / re-plant blend instead of snapping.
+            if (!_footSmoothInit[idx]) { _footSmoothPos[idx] = targetPos; _footSmoothRot[idx] = targetRot; _footSmoothInit[idx] = true; }
+            float s = footSmoothSpeed > 0f ? 1f - Mathf.Exp(-footSmoothSpeed * Time.deltaTime) : 1f;
+            _footSmoothPos[idx] = Vector3.Lerp(_footSmoothPos[idx], targetPos, s);
+            _footSmoothRot[idx] = Quaternion.Slerp(_footSmoothRot[idx], targetRot, s);
 
-            Vector3 targetPos = hit.point + hit.normal * footSmearSurfaceOffset;
-            Quaternion targetRot = PlantRotation(hit.normal, sideSign, eff.bone.rotation);
-
-            eff.position = targetPos;
-            eff.rotation = targetRot;
-            eff.positionWeight = w * stance;
-            eff.rotationWeight = w * stance * footSmearRotWeight;
-
-            // Touchdown → lock the plant for the rest of the stance.
-            if (enableFootLock && stance > footLockEnter)
-            {
-                locked = true;
-                lockPos = targetPos;
-                lockRot = targetRot;
-            }
+            eff.position = _footSmoothPos[idx];
+            eff.rotation = _footSmoothRot[idx];
+            eff.positionWeight = posW;
+            eff.rotationWeight = rotW;
         }
 
         /// <summary>
