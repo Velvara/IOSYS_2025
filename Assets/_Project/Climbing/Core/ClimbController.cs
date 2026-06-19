@@ -90,9 +90,9 @@ namespace Game.Climbing
         [Tooltip("Min angle of the grab normal from world up — keeps floors/ceilings ungrabbable. 90 = vertical wall.")]
         [SerializeField] private float minWallAngle = 45f;
 
-        [Header("Climb Pose (animator ClimbingLayer)")]
-        [Tooltip("Seconds to cross-fade between the braced and free-hang pose states.")]
-        [SerializeField] private float poseCrossFade = 0.2f;
+        [Header("Climb Pose (animator ClimbingLayer + ClimbLegsLayer)")]
+        [Tooltip("How fast braced↔free-hang blends the leg-layer weight, foot-IK weight and standoff toward 0 in free hang. Roughly match your animator transition-clip length.")]
+        [SerializeField] private float freeHangBlendSpeed = 4f;
         [Tooltip("Enter FREE HANG when Dot(outwardNormal, up) drops BELOW this (surface above you / overhang). Negative.")]
         [SerializeField] private float freeHangEnterDot = -0.5f;
         [Tooltip("Return to BRACED when Dot(outwardNormal, up) rises ABOVE this. Kept above the enter value for hysteresis (no flicker). Negative.")]
@@ -185,6 +185,18 @@ namespace Game.Climbing
         [SerializeField] private Vector3 footPlantRotation = Vector3.zero;
         [Tooltip("Per-axis sign multiplier applied to footPlantRotation for the RIGHT foot (mirror-image foot bones, like footGripMirror).")]
         [SerializeField] private Vector3 footPlantMirror = new Vector3(-1f, 1f, 1f);
+        [Tooltip("Estimated trunk radius — the foot cast aims at a point this far behind the hand surface (≈ the trunk axis), so feet splayed around the curve still cast INTO the trunk instead of past it.")]
+        [SerializeField] private float trunkAxisDepth = 0.5f;
+        [Tooltip("Lock a planted foot in world space through its stance — no skating, no re-twist. Off = re-derive every frame (previous behaviour).")]
+        [SerializeField] private bool enableFootLock = true;
+        [Tooltip("Stance above which a planted foot LOCKS in world space.")]
+        [Range(0f, 1f)]
+        [SerializeField] private float footLockEnter = 0.6f;
+        [Tooltip("Stance below which a locked foot UNLOCKS into swing. Keep below footLockEnter for hysteresis.")]
+        [Range(0f, 1f)]
+        [SerializeField] private float footLockExit = 0.35f;
+        [Tooltip("A locked foot also UNLOCKS once the animated (clip) foot has moved this far from the lock — so feet re-plant as the body climbs past instead of pinning for a long time. LOWER = feet step more often.")]
+        [SerializeField] private float footLockBreak = 0.35f;
 
         [Header("Debug (skeleton test)")]
         [Tooltip("Allow toggling a climb takeover with the debug key — for verifying enter/exit only.")]
@@ -206,9 +218,14 @@ namespace Game.Climbing
         private static readonly int _hIsClimbing = Animator.StringToHash("isClimbing");
         private static readonly int _hClimbHang = Animator.StringToHash("ClimbHang");
         private static readonly int _hFreeHang = Animator.StringToHash("FreeHang");
+        private static readonly int _hIsFreeHang = Animator.StringToHash("IsFreeHang");
+        private float _bracedWeight = 1f;   // 1 = braced (legs/foot-IK/standoff active), 0 = free hang
         private int _climbLegsLayerIndex = -1;
         private Vector2 _legBlend;
         private bool _smearHooked;
+        private bool _lFootLocked, _rFootLocked;
+        private Vector3 _lFootLockPos, _rFootLockPos;
+        private Quaternion _lFootLockRot = Quaternion.identity, _rFootLockRot = Quaternion.identity;
         private static readonly int _hClimbMoveX = Animator.StringToHash("ClimbMoveX");
         private static readonly int _hClimbMoveY = Animator.StringToHash("ClimbMoveY");
 
@@ -423,6 +440,7 @@ namespace Game.Climbing
             _lFootHoldIdx = _rFootHoldIdx = -1;
             _standoffPush = 0f;
             _legBlend = Vector2.zero;
+            _lFootLocked = _rFootLocked = false;
             ApplyGripOffset();
 
             UpdateBodyPose(instant: true);
@@ -483,6 +501,9 @@ namespace Game.Climbing
             // as the IK fades (the layer WEIGHT reveals climbing — the isClimbing bool alone won't).
             if (_animator != null && _climbLayerIndex >= 0)
                 _animator.SetLayerWeight(_climbLayerIndex, _rig.MasterWeight);
+
+            // Braced↔free-hang blend: fades the leg layer, foot IK and standoff toward 0 in free hang.
+            _bracedWeight = Mathf.MoveTowards(_bracedWeight, _freeHang ? 0f : 1f, freeHangBlendSpeed * dt);
 
             ApplyGripOffset();
             SetArmBendDirections(elbowBendWeight);
@@ -570,6 +591,7 @@ namespace Game.Climbing
                 // once needs the lean back on; the two probes can later drive that tilt from their delta.)
                 push = Mathf.Max(chestPush, hipPush);
             }
+            push *= _bracedWeight;   // no torso standoff in free hang
 
             float t = instant ? 1f : 1f - Mathf.Exp(-standoffSpeed * Time.deltaTime);
             _standoffPush = Mathf.Lerp(_standoffPush, push, t);
@@ -625,10 +647,17 @@ namespace Game.Climbing
         private void PlayPose(bool free, bool instant)
         {
             _freeHang = free;
-            if (_animator == null || _climbLayerIndex < 0) return;
-            int state = free ? _hFreeHang : _hClimbHang;
-            if (instant) _animator.Play(state, _climbLayerIndex, 0f);
-            else _animator.CrossFade(state, poseCrossFade, _climbLayerIndex);
+            if (free) { _lFootLocked = _rFootLocked = false; }   // drop foot locks when entering free hang
+            if (_animator == null) return;
+
+            // The animator plays the braced↔hang TRANSITION clips off this bool. Code only toggles intent.
+            _animator.SetBool(_hIsFreeHang, free);
+            if (instant)
+            {
+                _bracedWeight = free ? 0f : 1f;
+                if (_climbLayerIndex >= 0)
+                    _animator.Play(free ? _hFreeHang : _hClimbHang, _climbLayerIndex, 0f);
+            }
         }
 
         /// <summary>
@@ -687,7 +716,7 @@ namespace Game.Climbing
             _animator.SetFloat(_hClimbMoveX, _legBlend.x);
             _animator.SetFloat(_hClimbMoveY, _legBlend.y);
             if (_climbLegsLayerIndex >= 0)
-                _animator.SetLayerWeight(_climbLegsLayerIndex, _rig.MasterWeight);
+                _animator.SetLayerWeight(_climbLegsLayerIndex, _rig.MasterWeight * _bracedWeight);
         }
 
         /// <summary>
@@ -700,48 +729,85 @@ namespace Game.Climbing
         private void SmearFeet()
         {
             if (!_isClimbing || !useAnimatedLegs || _rig == null || ik == null || ik.solver == null) return;
-            SmearFoot(ik.solver.leftFootEffector, -1f);
-            SmearFoot(ik.solver.rightFootEffector, +1f);
+            SmearFoot(ik.solver.leftFootEffector, -1f, ref _lFootLocked, ref _lFootLockPos, ref _lFootLockRot);
+            SmearFoot(ik.solver.rightFootEffector, +1f, ref _rFootLocked, ref _rFootLockPos, ref _rFootLockRot);
         }
 
-        private void SmearFoot(IKEffector eff, float sideSign)
+        private void SmearFoot(IKEffector eff, float sideSign, ref bool locked, ref Vector3 lockPos, ref Quaternion lockRot)
         {
             if (eff == null || eff.bone == null) return;
 
-            Vector3 n = AvgOutward();
+            Vector3 outward = AvgOutward();
             Vector3 footPos = eff.bone.position;                 // animator-posed foot (pre-solve)
-            Vector3 origin = footPos + n * footSmearBackup;
-            float w = _rig.MasterWeight * footIKWeight;
+            float w = _rig.MasterWeight * footIKWeight * _bracedWeight;   // foot IK fades out in free hang
 
-            if (Physics.SphereCast(origin, footSmearRadius, -n, out RaycastHit hit,
-                                   footSmearBackup + footSmearMaxDist, climbableLayers, QueryTriggerInteraction.Ignore))
+            // Curvature-aware inward direction: aim the cast at the trunk-axis estimate (a point
+            // trunkAxisDepth behind the hand surface), so a foot splayed around the curve still casts
+            // INTO the trunk instead of shooting past it along the body's fixed radial.
+            Vector3 axis = _rig.HandAverage - outward * trunkAxisDepth;
+            axis.y = footPos.y;
+            Vector3 toAxis = axis - footPos;
+            Vector3 inward = toAxis.sqrMagnitude > 1e-4f ? toAxis.normalized : -outward;
+            Vector3 origin = footPos - inward * footSmearBackup;
+
+            bool hasHit = Physics.SphereCast(origin, footSmearRadius, inward, out RaycastHit hit,
+                                             footSmearBackup + footSmearMaxDist, climbableLayers, QueryTriggerInteraction.Ignore);
+            float contactDist = hasHit ? hit.distance - footSmearBackup : float.MaxValue;
+            float stance = 1f - Mathf.Clamp01(Mathf.InverseLerp(footContactNear, footContactFar, contactDist));
+
+            // Locked stance: hold the captured plant in world space (no skating / no re-twist) until the
+            // clip lifts the foot (stance drops below the exit threshold).
+            if (enableFootLock && locked)
             {
-                float contactDist = hit.distance - footSmearBackup;                 // animated foot → surface
-                float stance = 1f - Mathf.Clamp01(Mathf.InverseLerp(footContactNear, footContactFar, contactDist));
-
-                // CHARACTER-relative plant rotation (not the clip, not the trunk tangent): sole on the
-                // surface (up = surface normal), toes angled up + out to the foot's own side in character
-                // space, laid flat on the surface. Same every plant → predictable, no knee twist.
-                Vector3 toe = transform.up + transform.right * (sideSign * footToeSide);
-                toe = Vector3.ProjectOnPlane(toe, hit.normal);
-                Quaternion rot = toe.sqrMagnitude > 1e-5f
-                    ? Quaternion.LookRotation(toe.normalized, hit.normal)
-                    : eff.bone.rotation;
-
-                // Rig foot-bone axis convention / fine-tune (mirrored for the right foot).
-                Vector3 off = sideSign < 0f ? footPlantRotation : Vector3.Scale(footPlantRotation, footPlantMirror);
-                rot *= Quaternion.Euler(off);
-
-                eff.position = hit.point + hit.normal * footSmearSurfaceOffset;
-                eff.rotation = rot;
-                eff.positionWeight = w * stance;
-                eff.rotationWeight = w * stance * footSmearRotWeight;
+                // Hold only while the clip foot is still down (stance) AND hasn't moved far from the lock.
+                // The drift break re-plants feet as the body climbs past, so they don't pin for a long time.
+                if (stance >= footLockExit &&
+                    (eff.bone.position - lockPos).sqrMagnitude < footLockBreak * footLockBreak)
+                {
+                    eff.position = lockPos;
+                    eff.rotation = lockRot;
+                    eff.positionWeight = w;
+                    eff.rotationWeight = w * footSmearRotWeight;
+                    return;
+                }
+                locked = false;   // foot lifted (clip) or body climbed past → re-plant
             }
-            else
+
+            if (!hasHit)
             {
                 eff.positionWeight = 0f;
                 eff.rotationWeight = 0f;
+                return;
             }
+
+            Vector3 targetPos = hit.point + hit.normal * footSmearSurfaceOffset;
+            Quaternion targetRot = PlantRotation(hit.normal, sideSign, eff.bone.rotation);
+
+            eff.position = targetPos;
+            eff.rotation = targetRot;
+            eff.positionWeight = w * stance;
+            eff.rotationWeight = w * stance * footSmearRotWeight;
+
+            // Touchdown → lock the plant for the rest of the stance.
+            if (enableFootLock && stance > footLockEnter)
+            {
+                locked = true;
+                lockPos = targetPos;
+                lockRot = targetRot;
+            }
+        }
+
+        /// <summary>
+        /// Character-relative plant rotation: sole on the surface (up = normal), toes up + out to the
+        /// foot's own side in character space, + the rig-convention euler offset (mirrored for the right foot).
+        /// </summary>
+        private Quaternion PlantRotation(Vector3 normal, float sideSign, Quaternion fallback)
+        {
+            Vector3 toe = transform.up + transform.right * (sideSign * footToeSide);
+            toe = Vector3.ProjectOnPlane(toe, normal);
+            Quaternion rot = toe.sqrMagnitude > 1e-5f ? Quaternion.LookRotation(toe.normalized, normal) : fallback;
+            Vector3 off = sideSign < 0f ? footPlantRotation : Vector3.Scale(footPlantRotation, footPlantMirror);
+            return rot * Quaternion.Euler(off);
         }
 
         private void UpdateFoot(ClimbEffector foot, ClimbEffector sameSideHand, float sideSign, float dt)
