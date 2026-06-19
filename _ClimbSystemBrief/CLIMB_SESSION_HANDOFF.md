@@ -6,7 +6,46 @@ and what every recent change was.
 
 ---
 
-## TL;DR — what to do next (your editor task)
+## ▶ RESUME HERE (session 2026-06-19b — FREE-HANG REFINEMENT, pending dev recompile)
+
+Climbing is **visually complete** (animated legs + foot IK, free-hang transition, two-mass pendulum +
+spine twist). This session **reworked free-hang behaviour** in `ClimbController.cs` (code only — no
+editor/asset changes). Recompile + test in free hang (overhang on the trunk) and confirm a clean Console.
+
+**What changed (free hang only; braced path untouched):**
+1. **Body hangs straight down from the hand-midpoint** — free hang no longer applies `rootForwardOffset`
+   / `rootDownOffset`. Position = `HandAverage − up·freeHangDrop` (new field). Blended by `_bracedWeight`
+   so brace→free doesn't pop.
+2. **Torso never pitches toward the arms** (the old 🐞) — free-hang body rotation is **yaw-only** to a
+   turn-driven facing (not `LookRotation(-avgOut, up)`), and `TwistSpine` now keeps only the **lateral**
+   (sideways) part of the pendulum swing in free hang, dropping the fore/aft pitch. Braced keeps the full
+   swing. Sideways sway still reads; forward/back lean is gone.
+3. **Turn-to-face before traversing (brachiation)** — in free hang the body first **turns to face the
+   camera-relative input direction via hand-steps** (one hand pivots, the other swings around an arc,
+   rotating the facing ~`freeHangTurnPerStep`° per hold), and only **leapfrogs forward once it faces
+   within `freeHangMoveAngle`** of the input. Change input direction mid-hang → it re-turns before moving.
+
+**New inspector fields (header "Free Hang"):** `freeHangDrop` (straight-down drop, def 1.4),
+`freeHangTurnPerStep` (deg/hand-step, def 36 → ~5 holds for 180°; lower = slower turn over more holds),
+`freeHangMoveAngle` (deg tolerance before travel starts, def 25), `freeHangTurnSmooth` (yaw easing
+between steps, def 8).
+
+**Known limitation to watch/report:** the turn is realised by hand-steps, so if the surface has too few
+reachable holds to arc the hand around, the turn can **stall** (no facing progress). Levers: denser holds,
+larger `maxStepReach`, larger `freeHangTurnPerStep`. Also large (~180°) turns may visibly twist the arms
+mid-turn — acceptable for now.
+
+**Then — the mechanic lifecycle** (climbing isn't playable end-to-end yet): real entry/exit (replace
+debug **C**) + charged **jump-off** using the still-unused Phase-0 `AddLaunchVelocity`/
+`SetVerticalVelocity`; then **mantle/reach-top** (near-horizontal zone reserved); reach-bottom; later
+the authored-cliff bake pipeline + HoldStreamer, then the brief's ragdoll/slide/tumble/icons/weather.
+
+Open inspector tuning (yours): free-hang fields above; feet (`footSmoothSpeed`, `footContact*` band),
+camera (re-parent PlayerCameraRoot off any bone + Cinemachine body damping), pendulum/spine weights.
+
+---
+
+## (Earlier) TL;DR — animated-legs editor task
 
 We **pivoted the legs** from procedural foot-stepping to **animation + foot-IK**, because the
 procedural feet stayed janky (flip-flopping holds, knees inverting, body turning outward). The

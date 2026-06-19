@@ -98,6 +98,16 @@ namespace Game.Climbing
         [Tooltip("Return to BRACED when Dot(outwardNormal, up) rises ABOVE this. Kept above the enter value for hysteresis (no flicker). Negative.")]
         [SerializeField] private float freeHangExitDot = -0.4f;
 
+        [Header("Free Hang (brachiation — turn to face, then traverse)")]
+        [Tooltip("How far the body hangs straight DOWN below the hand-midpoint in free hang. Independent of rootForwardOffset/rootDownOffset — the body sits directly under the middle of the two hand holds.")]
+        [SerializeField] private float freeHangDrop = 1.4f;
+        [Tooltip("Degrees the body's facing rotates per hand-step while re-facing the input direction in free hang. A full ~180° turn takes ~(180/this) hand holds. Lower = the turn spreads over more holds.")]
+        [SerializeField] private float freeHangTurnPerStep = 36f;
+        [Tooltip("The body must face within this angle (deg) of the input direction before free-hang traversal advances; beyond it, the hands only turn the body (no travel).")]
+        [SerializeField] private float freeHangMoveAngle = 25f;
+        [Tooltip("How fast the body yaw eases toward the per-step facing between hand-steps (visual smoothing of the turn). Higher = snappier.")]
+        [SerializeField] private float freeHangTurnSmooth = 8f;
+
         [Header("Feet / Bracing (own tuning — legs reach further than arms)")]
         [Tooltip("Hip drop below the hand-average (the foot anchor reference). Pendulum replaces this later.")]
         [SerializeField] private float hipDropFromHands = 0.9f;
@@ -245,6 +255,9 @@ namespace Game.Climbing
         private static readonly int _hFreeHang = Animator.StringToHash("FreeHang");
         private static readonly int _hIsFreeHang = Animator.StringToHash("IsFreeHang");
         private float _bracedWeight = 1f;   // 1 = braced (legs/foot-IK/standoff active), 0 = free hang
+        private Vector3 _freeHangFacing;            // horizontal direction the body faces in free hang (turn target)
+        private Quaternion _freeHangBodyRot = Quaternion.identity;   // eased free-hang body yaw (between hand-steps)
+        private Quaternion _bracedLeanRot = Quaternion.identity;     // eased braced lean target (shelved enableLean path)
         private int _climbLegsLayerIndex = -1;
         private Vector2 _legBlend;
         private bool _smearHooked;
@@ -482,6 +495,9 @@ namespace Game.Climbing
             _pendulumAccumulator = 0f;
             ApplyGripOffset();
 
+            _freeHangFacing = intoFlat.sqrMagnitude > 1e-4f ? intoFlat.normalized : transform.forward;
+            _freeHangBodyRot = Quaternion.LookRotation(_freeHangFacing, Vector3.up);
+
             ConfigurePendulum();
             _pendulum?.Reset(_rig.HandAverage);
             UpdateBodyPose(instant: true);
@@ -584,36 +600,56 @@ namespace Game.Climbing
         {
             Vector3 avgOut = AvgOutward();
 
+            // ---- Rotation ----
+            // BRACED target: face the surface, upright (yaw only). (enableLean = shelved 3-D variant.)
+            Quaternion bracedRot;
             if (enableLean)
             {
-                // [SHELVED — experimental, off by default] full-3D lean to the averaged contact normal.
-                // Never read right for the dev; kept behind the toggle, not deleted.
+                // [SHELVED — experimental, off by default] full-3D lean to the averaged contact normal,
+                // eased by bodyOrientSpeed (kept so the field stays referenced — see CS0414 note).
                 Vector3 into = -BodyNormal();
-                if (Mathf.Abs(Vector3.Dot(into, Vector3.up)) < 0.97f)
-                {
-                    Quaternion target = Quaternion.LookRotation(into, Vector3.up);
-                    float t = instant ? 1f : 1f - Mathf.Exp(-bodyOrientSpeed * Time.deltaTime);
-                    transform.rotation = Quaternion.Slerp(transform.rotation, target, t);
-                }
+                Quaternion leanTarget = Mathf.Abs(Vector3.Dot(into, Vector3.up)) < 0.97f
+                    ? Quaternion.LookRotation(into, Vector3.up)
+                    : _bracedLeanRot;
+                _bracedLeanRot = instant
+                    ? leanTarget
+                    : Quaternion.Slerp(_bracedLeanRot, leanTarget, 1f - Mathf.Exp(-bodyOrientSpeed * Time.deltaTime));
+                bracedRot = _bracedLeanRot;
             }
             else
             {
-                // PREVIOUS rotation logic (restored default): face the flattened into-surface direction,
-                // stay upright (yaw only). Stable — what we had before the lean/standoff patches.
                 Vector3 intoFlat = Vector3.ProjectOnPlane(-avgOut, Vector3.up);
-                if (intoFlat.sqrMagnitude > 1e-4f)
-                    transform.rotation = Quaternion.LookRotation(intoFlat.normalized, Vector3.up);
+                bracedRot = intoFlat.sqrMagnitude > 1e-4f
+                    ? Quaternion.LookRotation(intoFlat.normalized, Vector3.up)
+                    : transform.rotation;
             }
 
-            // Rigid hang (restore-point) vs pendulum hang (experiment): the pendulum's lower mass swings
-            // below the hands as the anchor (hands) moves, so the body lags/sways instead of snapping.
+            // FREE-HANG target: yaw to the turn-driven facing, upright — the torso never pitches toward
+            // the hands. Eased between the discrete per-hand-step facing changes so the turn reads smooth.
+            Quaternion freeRot = _freeHangFacing.sqrMagnitude > 1e-4f
+                ? Quaternion.LookRotation(_freeHangFacing, Vector3.up)
+                : bracedRot;
+            _freeHangBodyRot = instant
+                ? freeRot
+                : Quaternion.Slerp(_freeHangBodyRot, freeRot, 1f - Mathf.Exp(-freeHangTurnSmooth * Time.deltaTime));
+
+            transform.rotation = Quaternion.Slerp(_freeHangBodyRot, bracedRot, _bracedWeight);
+
+            // ---- Position ----
+            // BRACED: rigid drop (restore-point) vs pendulum hang (lower mass swings below the moving hands).
             Vector3 rigidPos = _rig.HandAverage + avgOut * rootForwardOffset - Vector3.up * rootDownOffset;
-            transform.position = usePendulum && _pendulum != null
+            Vector3 bracedPos = usePendulum && _pendulum != null
                 ? Vector3.Lerp(rigidPos, _pendulum.LowerPos + avgOut * rootForwardOffset, pendulumWeight)
                 : rigidPos;
 
-            // Torso standoff push — gated by `enableStandoff`: OFF = no push (current behaviour, body can
-            // clip the trunk); ON = push the body off the surface as before. Toggle in the inspector to compare.
+            // FREE-HANG: hang straight DOWN from the hand-midpoint — independent of rootForwardOffset /
+            // rootDownOffset (body sits directly below the middle of the two hand holds). Sideways
+            // liveliness comes from the spine lean (TwistSpine), not a positional sway.
+            Vector3 freePos = _rig.HandAverage - Vector3.up * freeHangDrop;
+
+            transform.position = Vector3.Lerp(freePos, bracedPos, _bracedWeight);
+
+            // Torso standoff push — gated by `enableStandoff` and scaled by _bracedWeight (no push in free hang).
             ApplyStandoff(avgOut, instant);
         }
 
@@ -657,7 +693,16 @@ namespace Game.Climbing
             float w = spineSwingWeight * _rig.MasterWeight;
             if (w <= 0.001f) return;
 
-            Quaternion swing = Quaternion.FromToRotation(Vector3.down, _pendulum.UpperDir);
+            // In FREE HANG the torso must not pitch toward the arms — keep only the LATERAL (sideways)
+            // part of the swing and drop the fore/aft component along the body's forward axis. Braced
+            // keeps the full swing. (_bracedWeight: 1 = braced/full, 0 = free/lateral-only.)
+            Vector3 dir = _pendulum.UpperDir;
+            Vector3 lateral = Vector3.ProjectOnPlane(dir, transform.forward);
+            dir = lateral.sqrMagnitude > 1e-5f
+                ? Vector3.Slerp(lateral.normalized, dir, _bracedWeight)
+                : Vector3.Slerp(Vector3.down, dir, _bracedWeight);   // pure fore/aft swing → straight down in free hang
+
+            Quaternion swing = Quaternion.FromToRotation(Vector3.down, dir);
 
             if (spineBoneLower != null)
             {
@@ -748,7 +793,13 @@ namespace Game.Climbing
         private void PlayPose(bool free, bool instant)
         {
             _freeHang = free;
-            if (free) { _lFootLocked = _rFootLocked = false; }   // drop foot locks when entering free hang
+            if (free)
+            {
+                _lFootLocked = _rFootLocked = false;   // drop foot locks when entering free hang
+                // Seed the free-hang facing from the current body yaw so the brace→free switch doesn't snap.
+                Vector3 fwd = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
+                if (fwd.sqrMagnitude > 1e-4f) _freeHangFacing = fwd.normalized;
+            }
             if (_animator == null) return;
 
             // The animator plays the braced↔hang TRANSITION clips off this bool. Code only toggles intent.
@@ -1117,6 +1168,9 @@ namespace Game.Climbing
             Vector2 mv = _input.MoveInput;
             if (mv.sqrMagnitude < minMoveInput * minMoveInput) return;
 
+            // Free hang = brachiation: turn to face the input first, then traverse (separate model).
+            if (_freeHang) { HandleFreeHangTraversal(mv); return; }
+
             // Camera-relative input mapped onto the surface tangent plane: x = screen-right projected
             // onto the surface, y = up the surface. Falls back gracefully on near-horizontal surfaces.
             Vector3 avgOut = AvgOutward();
@@ -1171,6 +1225,113 @@ namespace Game.Climbing
             else _lhOutward = tr * Vector3.forward;
             _moveCooldown = moveInterval;
             return true;
+        }
+
+        /// <summary>
+        /// Free-hang traversal = brachiation. The body first TURNS to face the (camera-relative) input
+        /// direction, then travels. The turn is realised through hand-steps — one hand pivots on the
+        /// other and swings around an arc, rotating the hand pair (and the body facing) a little each
+        /// step — so a full re-face takes several holds. No forward progress until the body faces within
+        /// freeHangMoveAngle of the input; then the hands leapfrog forward in the facing direction.
+        /// </summary>
+        private void HandleFreeHangTraversal(Vector2 mv)
+        {
+            if (_cam == null && Camera.main != null) _cam = Camera.main.transform;
+            Vector3 camF = Vector3.ProjectOnPlane(_cam != null ? _cam.forward : transform.forward, Vector3.up);
+            Vector3 camR = Vector3.ProjectOnPlane(_cam != null ? _cam.right : transform.right, Vector3.up);
+            if (camF.sqrMagnitude < 1e-4f) camF = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
+            if (camR.sqrMagnitude < 1e-4f) camR = Vector3.ProjectOnPlane(transform.right, Vector3.up);
+            if (camF.sqrMagnitude < 1e-4f || camR.sqrMagnitude < 1e-4f) return;
+
+            Vector3 wish = camR.normalized * mv.x + camF.normalized * mv.y;
+            if (wish.sqrMagnitude < 1e-4f) return;
+            wish.Normalize();
+
+            if (_freeHangFacing.sqrMagnitude < 1e-4f) _freeHangFacing = wish;
+
+            float angleErr = Vector3.SignedAngle(_freeHangFacing, wish, Vector3.up);
+
+            if (Mathf.Abs(angleErr) > freeHangMoveAngle)
+            {
+                // TURN: rotate the hand pair toward the input — one hand-step at a time, no net travel.
+                // Commit the facing rotation only when a hand actually steps, so the turn is paced by holds.
+                float stepDeg = Mathf.Clamp(angleErr, -freeHangTurnPerStep, freeHangTurnPerStep);
+                bool stepRight = stepDeg < 0f;   // turning clockwise (right) → reach the right hand around first
+                if (TryStepHandArc(stepRight, stepDeg) || TryStepHandArc(!stepRight, stepDeg))
+                    _freeHangFacing = (Quaternion.AngleAxis(stepDeg, Vector3.up) * _freeHangFacing).normalized;
+            }
+            else
+            {
+                // Facing the input (within tolerance) → finish the last few degrees and leapfrog forward.
+                _freeHangFacing = Vector3.RotateTowards(_freeHangFacing, wish, Mathf.Deg2Rad * freeHangTurnPerStep, 0f);
+                Vector3 rhPos = _rig.GetCurrentPosition(ClimbEffector.RightHand);
+                Vector3 lhPos = _rig.GetCurrentPosition(ClimbEffector.LeftHand);
+                bool primaryRight = Vector3.Dot(rhPos - lhPos, wish) <= 0f;
+                if (!TryStepHand(primaryRight, rhPos, lhPos, wish, AvgOutward()))
+                    TryStepHand(!primaryRight, rhPos, lhPos, wish, AvgOutward());
+            }
+        }
+
+        /// <summary>
+        /// Steps one hand along an arc around the OTHER (pivot) hand by <paramref name="stepDeg"/> about
+        /// world up, walking the hand pair around to rotate the body's facing. Returns true if a hold was found.
+        /// </summary>
+        private bool TryStepHandArc(bool moveRight, float stepDeg)
+        {
+            ClimbEffector hand = moveRight ? ClimbEffector.RightHand : ClimbEffector.LeftHand;
+            ClimbEffector pivotE = moveRight ? ClimbEffector.LeftHand : ClimbEffector.RightHand;
+            Vector3 fromPos = _rig.GetCurrentPosition(hand);
+            Vector3 pivot = _rig.GetCurrentPosition(pivotE);
+            Vector3 ideal = pivot + Quaternion.AngleAxis(stepDeg, Vector3.up) * (fromPos - pivot);
+
+            if (!FindFreeHangHold(ideal, fromPos, pivot, out Vector3 tp, out Quaternion tr))
+                return false;
+
+            _rig.SetPoseTarget(hand, tp, tr, traverseMoveDuration);
+            if (moveRight) _rhOutward = tr * Vector3.forward; else _lhOutward = tr * Vector3.forward;
+            _moveCooldown = moveInterval;
+            return true;
+        }
+
+        /// <summary>
+        /// Nearest hold to <paramref name="ideal"/> for a free-hang hand step: within the reach band of
+        /// the moving hand, clear of and within max separation of the pivot hand, on the same face. No
+        /// anti-cross / progress filters (the body is turning, not leapfrogging a fixed direction).
+        /// </summary>
+        private bool FindFreeHangHold(Vector3 ideal, Vector3 fromPos, Vector3 pivotPos, out Vector3 pos, out Quaternion rot)
+        {
+            pos = Vector3.zero;
+            rot = Quaternion.identity;
+            var s = _currentSurface;
+            if (s == null || !s.HoldsReady) return false;
+
+            Transform st = s.transform;
+            var holds = s.Holds;
+            float minSqr = minStepDistance * minStepDistance;
+            float maxSqr = maxStepReach * maxStepReach;
+            float clearSqr = handClearance * handClearance;
+            float maxSepSqr = maxHandSeparation * maxHandSeparation;
+            Vector3 climberOut = AvgOutward();
+            float best = float.MaxValue;
+            bool found = false;
+
+            for (int i = 0; i < holds.Count; i++)
+            {
+                Vector3 wp = st.TransformPoint(holds[i].LocalPosition);
+
+                float fromSqr = (wp - fromPos).sqrMagnitude;
+                if (fromSqr < minSqr || fromSqr > maxSqr) continue;            // reach band of the moving hand
+
+                float pivSqr = (wp - pivotPos).sqrMagnitude;
+                if (pivSqr < clearSqr || pivSqr > maxSepSqr) continue;         // clear of + within reach of the pivot hand
+
+                Quaternion wr = st.rotation * holds[i].LocalRotation;
+                if (Vector3.Dot(wr * Vector3.forward, climberOut) < facingCoherence) continue;   // same face
+
+                float d = (wp - ideal).sqrMagnitude;
+                if (d < best) { best = d; pos = wp; rot = wr; found = true; }
+            }
+            return found;
         }
 
         /// <summary>
