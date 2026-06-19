@@ -3480,6 +3480,8 @@ MonoBehaviour:
   shoulderWidth: 0.45
   rootForwardOffset: 0.35
   rootDownOffset: 1.4
+  enableLean: 0
+  bodyOrientSpeed: 10
   leftHandGripRotation: {x: 0, y: 180, z: 0}
   rightHandGripRotation: {x: 0, y: 180, z: 0}
   elbowBendWeight: 1
@@ -3497,12 +3499,54 @@ MonoBehaviour:
   maxHandSeparation: 0.7
   climbableLayers:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 7991
   detectRadius: 2.5
   maxReach: 2
   detectHeightOffset: 1
   maxGrabAngle: 80
   minWallAngle: 45
+  poseCrossFade: 0.2
+  freeHangEnterDot: -0.5
+  freeHangExitDot: -0.4
+  hipDropFromHands: 0.9
+  hipForwardOffset: 0.35
+  footDrop: 0.55
+  footSide: 0.16
+  legReach: 1
+  footBelowHands: 0.3
+  footHoldClearance: 0.2
+  footCrossMargin: 0.1
+  footMoveDuration: 0.18
+  footStepInterval: 0.08
+  footStickRadius: 0.4
+  footLeanInfluence: 0
+  footWeightFadeSpeed: 6
+  footGripRotation: {x: 0, y: 0, z: 0}
+  footGripMirror: {x: 1, y: -1, z: -1}
+  kneeBendWeight: 0
+  kneeOutward: 0.3
+  enableStandoff: 1
+  chestProbeHeight: 1.4
+  chestStandoff: 0.3
+  hipProbeHeight: 1
+  hipStandoff: 0.3
+  standoffRadius: 0.2
+  standoffBackup: 0.8
+  maxStandoffPush: 0.6
+  standoffSpeed: 10
+  useAnimatedLegs: 1
+  climbMoveSmooth: 6
+  footSmearRadius: 0.08
+  footSmearBackup: 0.4
+  footSmearMaxDist: 0.6
+  footSmearSurfaceOffset: 0.02
+  footContactNear: 0.04
+  footContactFar: 0.22
+  footIKWeight: 1
+  footSmearRotWeight: 0.5
+  footToeSide: 0.5
+  footPlantRotation: {x: 0, y: 0, z: 137.4}
+  footPlantMirror: {x: -1, y: 1, z: 1}
   enableDebugToggle: 1
   debugToggleKey: 17
 --- !u!114 &4416926083347132241 stripped
