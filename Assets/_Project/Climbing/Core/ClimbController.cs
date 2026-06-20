@@ -38,10 +38,8 @@ namespace Game.Climbing
         [SerializeField] private float rootForwardOffset = 0.35f;
         [Tooltip("How far the player transform sits below the hands while hanging.")]
         [SerializeField] private float rootDownOffset = 1.4f;
-        [Tooltip("TEMP: enable the contact-normal torso lean. Off to isolate the standoff probes; flip on to restore the lean.")]
-        [SerializeField] private bool enableLean = false;
-        [Tooltip("How fast the torso leans to follow the averaged surface normal (higher = snappier, lower = floatier). Snapped instantly on grab.")]
-        [SerializeField] private float bodyOrientSpeed = 10f;
+        [Tooltip("Braced body rotation tweens to its new facing over (traverseMoveDuration × this) on each hand step, so it turns smoothly across the hand move and slower traversal yields gentler turns. Higher = slower/smoother (the turn carries into the next step); lower = snappier.")]
+        [SerializeField] private float bodyTurnDurationScale = 1.25f;
         [Tooltip("Euler offset for the LEFT hand effector rotation (palm against the hold). Often ~ (0,180,0).")]
         [SerializeField] private Vector3 leftHandGripRotation = new Vector3(0f, 180f, 0f);
         [Tooltip("Euler offset for the RIGHT hand effector rotation — mirror of the left; tune to keep the elbow natural.")]
@@ -131,9 +129,6 @@ namespace Game.Climbing
         [SerializeField] private float footStepInterval = 0.08f;
         [Tooltip("A planted foot KEEPS its hold until the ideal plant point drifts this far from it (stickiness — prevents flip-flopping between two near-equal holds). Larger = stickier.")]
         [SerializeField] private float footStickRadius = 0.4f;
-        [Tooltip("How much the planted feet influence the body LEAN (0 = hands only, most stable; raise once feet are stable to lean with a bending trunk).")]
-        [Range(0f, 1f)]
-        [SerializeField] private float footLeanInfluence = 0f;
         [Tooltip("How fast each foot's IK weight fades in (plant) / out (dangle), per second.")]
         [SerializeField] private float footWeightFadeSpeed = 6f;
         [Tooltip("Euler grip offset for the LEFT foot effector (sole against the surface). The right foot mirrors it per footGripMirror. Tune to the rig.")]
@@ -171,6 +166,8 @@ namespace Game.Climbing
         [SerializeField] private bool useAnimatedLegs = false;
         [Tooltip("How fast the leg-blend params (ClimbMoveX/Y) ease toward the movement direction.")]
         [SerializeField] private float climbMoveSmooth = 6f;
+        [Tooltip("Legs keep animating for this long after the last hand step, so they don't stutter between steps; once it elapses with no stepping (stuck / no holds ahead) the legs return to the idle braced pose. 0 = freeze the instant stepping stops.")]
+        [SerializeField] private float climbLegStopDelay = 0.2f;
         [Tooltip("Radius of the foot-smear probe.")]
         [SerializeField] private float footSmearRadius = 0.08f;
         [Tooltip("How far the foot-smear probe origin is backed OUT along the normal before casting in.")]
@@ -233,6 +230,28 @@ namespace Game.Climbing
         [Range(0f, 1f)]
         [SerializeField] private float spineLowerShare = 0.5f;
 
+        /// <summary>How the head picks its look point.</summary>
+        public enum HeadLookTarget { MidpointToLead, MovingHand }
+
+        [Header("Head Look")]
+        [Tooltip("How the head picks its look target. MidpointToLead = between the hand-midpoint and the reaching hand (idle eases toward neutral via Ahead Bias). MovingHand = look straight at the currently moving hand (idle returns to the animation default).")]
+        [SerializeField] private HeadLookTarget headLookTarget = HeadLookTarget.MidpointToLead;
+        [Tooltip("How strongly the head turns toward the look target (0 = keep the pure animation pose).")]
+        [Range(0f, 1f)]
+        [SerializeField] private float headLookWeight = 0.6f;
+        [Tooltip("Head/face bone. Auto-resolves to the humanoid Head if left empty.")]
+        [SerializeField] private Transform headBone;
+        [Tooltip("The head bone's local FORWARD (face) axis — tune to the rig (often +Z, sometimes +Y).")]
+        [SerializeField] private Vector3 headForwardAxis = Vector3.forward;
+        [Tooltip("While a hand is reaching: look this far from the hand-midpoint toward the LEAD (moving) hand (0 = the midpoint, 1 = the hand).")]
+        [Range(0f, 1f)]
+        [SerializeField] private float headLookLeadBias = 0.5f;
+        [Tooltip("When idle: look this far from the hand-midpoint toward the head's default (animation) forward (0 = the midpoint, 1 = keep the animation pose).")]
+        [Range(0f, 1f)]
+        [SerializeField] private float headLookAheadBias = 0.5f;
+        [Tooltip("How fast the head eases toward its look target (higher = snappier, lower = smoother). Smooths the jump when the lead hand switches or the head returns to neutral.")]
+        [SerializeField] private float headLookSmooth = 8f;
+
         [Header("Debug (skeleton test)")]
         [Tooltip("Allow toggling a climb takeover with the debug key — for verifying enter/exit only.")]
         [SerializeField] private bool enableDebugToggle = true;
@@ -257,9 +276,12 @@ namespace Game.Climbing
         private float _bracedWeight = 1f;   // 1 = braced (legs/foot-IK/standoff active), 0 = free hang
         private Vector3 _freeHangFacing;            // horizontal direction the body faces in free hang (turn target)
         private Quaternion _freeHangBodyRot = Quaternion.identity;   // eased free-hang body yaw (between hand-steps)
-        private Quaternion _bracedLeanRot = Quaternion.identity;     // eased braced lean target (shelved enableLean path)
+        private Quaternion _bracedBodyRot = Quaternion.identity;     // eased braced facing (smooths the rotation snap around curved surfaces)
         private int _climbLegsLayerIndex = -1;
         private Vector2 _legBlend;
+        private float _legMoveTimer;   // legs animate while > 0 (topped up while stepping; decays when stuck)
+        private Vector3 _headLookPoint;   // eased head look target (smooths lead-hand switch / return to neutral)
+        private bool _headLookInit;
         private bool _smearHooked;
         private bool _lFootLocked, _rFootLocked;
         private Vector3 _lFootLockPos, _rFootLockPos;
@@ -269,6 +291,7 @@ namespace Game.Climbing
         private readonly bool[] _footSmoothInit = new bool[2];
         private static readonly int _hClimbMoveX = Animator.StringToHash("ClimbMoveX");
         private static readonly int _hClimbMoveY = Animator.StringToHash("ClimbMoveY");
+        private static readonly int _hClimbLegsSpeed = Animator.StringToHash("ClimbLegsSpeed");
 
         // -- Owned subsystems --
         private EffectorRig _rig;
@@ -277,6 +300,8 @@ namespace Game.Climbing
 
         private bool _isClimbing;
         public bool IsClimbing => _isClimbing;
+        /// <summary>The surface currently being climbed (null when not climbing). Read <c>.Source</c> to tell a Flora trunk (Procedural) from a parsed cliff (Authored).</summary>
+        public ClimbableSurface CurrentSurface => _isClimbing ? _currentSurface : null;
 
         // -- Current grab candidate (while not climbing) --
         private bool _hasCandidate;
@@ -289,8 +314,6 @@ namespace Game.Climbing
         private float _masterWeightTarget;
         private Vector3 _rhOutward = Vector3.forward;  // outward normal of the right-hand hold
         private Vector3 _lhOutward = Vector3.forward;  // outward normal of the left-hand hold
-        private Vector3 _rfOutward = Vector3.forward;  // outward normal of the right-foot hold (last plant)
-        private Vector3 _lfOutward = Vector3.forward;  // outward normal of the left-foot hold (last plant)
         private ClimbableSurface _currentSurface;     // surface being climbed
         private float _moveCooldown;
 
@@ -302,6 +325,12 @@ namespace Game.Climbing
         // -- Torso standoff (smoothed outward push to keep the body off the surface) --
         private float _standoffPush;
         private float _pendulumAccumulator;   // fixed-step accumulator for the body pendulum sim
+
+        // -- Braced rotation tween (per hand step; duration tied to traverse speed) --
+        private Quaternion _rotTweenFrom = Quaternion.identity;
+        private Quaternion _rotTweenTo = Quaternion.identity;
+        private float _rotTweenT = 1f;         // normalized progress; 1 = settled
+        private float _rotTweenDur = 0.0001f;
 
         private void Awake()
         {
@@ -325,6 +354,8 @@ namespace Game.Climbing
                 if (spineBoneLower == null && _animator.isHuman)
                     spineBoneLower = _animator.GetBoneTransform(HumanBodyBones.Spine);
                 if (spineBoneLower == spineBone) spineBoneLower = null;   // need two distinct bones to spread
+                if (headBone == null && _animator.isHuman)
+                    headBone = _animator.GetBoneTransform(HumanBodyBones.Head);
             }
             else
             {
@@ -353,6 +384,7 @@ namespace Game.Climbing
             {
                 ik.solver.OnPreUpdate += SmearFeet;     // read animated feet → cast → set effectors
                 ik.solver.OnPostUpdate += TwistSpine;   // lean the chest after the solve (final override)
+                ik.solver.OnPostUpdate += HeadLook;     // turn the head after the spine twist (final override)
                 _smearHooked = true;
             }
         }
@@ -363,6 +395,7 @@ namespace Game.Climbing
             {
                 ik.solver.OnPreUpdate -= SmearFeet;
                 ik.solver.OnPostUpdate -= TwistSpine;
+                ik.solver.OnPostUpdate -= HeadLook;
                 _smearHooked = false;
             }
         }
@@ -489,6 +522,7 @@ namespace Game.Climbing
             _footCooldown = 0f;
             _lFootHoldIdx = _rFootHoldIdx = -1;
             _standoffPush = 0f;
+            _headLookInit = false;
             _legBlend = Vector2.zero;
             _lFootLocked = _rFootLocked = false;
             _footSmoothInit[0] = _footSmoothInit[1] = false;
@@ -516,7 +550,7 @@ namespace Game.Climbing
 
             _rig.SetMasterWeight(0f);
             _masterWeightTarget = 1f;
-            Debug.Log("[ClimbController] Grab.");
+            Debug.Log($"[ClimbController] Grab on {_currentSurface.Source} surface ({_currentSurface.name}).");
         }
 
         private void BeginRelease()
@@ -589,57 +623,52 @@ namespace Game.Climbing
         }
 
         /// <summary>
-        /// Positions and orients the body from the live contact normals (both hands + any planted feet).
-        /// The body sits outside the surface along that averaged normal, below the hands, and LEANS to
-        /// face it in full 3D (pitch to the surface, no roll) — so on a leaning/bending trunk the torso
-        /// inclines with the surface instead of staying bolt-upright. Rotation is Slerp-smoothed (snapped
-        /// on grab); near-vertical (overhang/top) is guarded against the LookRotation degeneracy. A single
-        /// transform gets one averaged lean; per-segment twist (chest vs hips) is the pendulum's job.
+        /// Positions and orients the body each frame. BRACED: face the surface (yaw only) via the per-step
+        /// rotation tween, and sit a standoff out from the surface below the hands. FREE HANG: yaw to the
+        /// turn-driven facing and hang straight down from the hand-midpoint. The two are blended by
+        /// <see cref="_bracedWeight"/>; rotation is snapped on grab (<paramref name="instant"/>).
         /// </summary>
         private void UpdateBodyPose(bool instant = false)
         {
             Vector3 avgOut = AvgOutward();
 
             // ---- Rotation ----
-            // BRACED target: face the surface, upright (yaw only). (enableLean = shelved 3-D variant.)
-            Quaternion bracedRot;
-            if (enableLean)
+            // BRACED facing turns via a per-step TWEEN (set in StartBracedTurn on each hand step) from the
+            // current rotation to the new target over a traverse-speed-tied duration — so the body rotates
+            // smoothly ACROSS the hand move instead of snapping when avgOut jumps a ring-angle.
+            if (instant)
             {
-                // [SHELVED — experimental, off by default] full-3D lean to the averaged contact normal,
-                // eased by bodyOrientSpeed (kept so the field stays referenced — see CS0414 note).
-                Vector3 into = -BodyNormal();
-                Quaternion leanTarget = Mathf.Abs(Vector3.Dot(into, Vector3.up)) < 0.97f
-                    ? Quaternion.LookRotation(into, Vector3.up)
-                    : _bracedLeanRot;
-                _bracedLeanRot = instant
-                    ? leanTarget
-                    : Quaternion.Slerp(_bracedLeanRot, leanTarget, 1f - Mathf.Exp(-bodyOrientSpeed * Time.deltaTime));
-                bracedRot = _bracedLeanRot;
+                _bracedBodyRot = ComputeBracedTarget();   // snap on grab
+                _rotTweenT = 1f;
             }
-            else
+            else if (_rotTweenT < 1f)
             {
-                Vector3 intoFlat = Vector3.ProjectOnPlane(-avgOut, Vector3.up);
-                bracedRot = intoFlat.sqrMagnitude > 1e-4f
-                    ? Quaternion.LookRotation(intoFlat.normalized, Vector3.up)
-                    : transform.rotation;
+                _rotTweenT = Mathf.Min(1f, _rotTweenT + Time.deltaTime / _rotTweenDur);
+                _bracedBodyRot = Quaternion.Slerp(_rotTweenFrom, _rotTweenTo, Mathf.SmoothStep(0f, 1f, _rotTweenT));
             }
+            // else: tween settled — hold _bracedBodyRot until the next hand step.
 
             // FREE-HANG target: yaw to the turn-driven facing, upright — the torso never pitches toward
             // the hands. Eased between the discrete per-hand-step facing changes so the turn reads smooth.
             Quaternion freeRot = _freeHangFacing.sqrMagnitude > 1e-4f
                 ? Quaternion.LookRotation(_freeHangFacing, Vector3.up)
-                : bracedRot;
+                : _bracedBodyRot;
             _freeHangBodyRot = instant
                 ? freeRot
                 : Quaternion.Slerp(_freeHangBodyRot, freeRot, 1f - Mathf.Exp(-freeHangTurnSmooth * Time.deltaTime));
 
-            transform.rotation = Quaternion.Slerp(_freeHangBodyRot, bracedRot, _bracedWeight);
+            transform.rotation = Quaternion.Slerp(_freeHangBodyRot, _bracedBodyRot, _bracedWeight);
 
             // ---- Position ----
             // BRACED: rigid drop (restore-point) vs pendulum hang (lower mass swings below the moving hands).
-            Vector3 rigidPos = _rig.HandAverage + avgOut * rootForwardOffset - Vector3.up * rootDownOffset;
+            // The standoff offset uses the SMOOTHED facing's outward (from the rotation tween), NOT the raw
+            // avgOut — avgOut jumps instantly when a hand grabs, which would pop the body ~rootForwardOffset·
+            // sin(step angle) sideways around the trunk each step (a snap the camera follows, independent of
+            // rotation/pendulum). Tying it to _bracedBodyRot makes the standoff follow the same smooth turn.
+            Vector3 facingOut = -(_bracedBodyRot * Vector3.forward);
+            Vector3 rigidPos = _rig.HandAverage + facingOut * rootForwardOffset - Vector3.up * rootDownOffset;
             Vector3 bracedPos = usePendulum && _pendulum != null
-                ? Vector3.Lerp(rigidPos, _pendulum.LowerPos + avgOut * rootForwardOffset, pendulumWeight)
+                ? Vector3.Lerp(rigidPos, _pendulum.LowerPos + facingOut * rootForwardOffset, pendulumWeight)
                 : rigidPos;
 
             // FREE-HANG: hang straight DOWN from the hand-midpoint — independent of rootForwardOffset /
@@ -718,6 +747,52 @@ namespace Game.Climbing
         }
 
         /// <summary>
+        /// Turns the head toward a look point, applied AFTER the solve + spine twist (final override). While
+        /// a hand is reaching, the point sits between the hand-midpoint and the LEAD (moving) hand, so the
+        /// character glances toward the hold it's going for; when idle it sits between the hand-midpoint and
+        /// the head's own default (animation) forward, so the head eases back to its neutral pose. Uses the
+        /// head's CURRENT forward (no rig-axis guess beyond <see cref="headForwardAxis"/>) so the turn is a
+        /// minimal rotation, scaled by weight × climb fade.
+        /// </summary>
+        private void HeadLook()
+        {
+            if (!_isClimbing || headBone == null || _rig == null) return;
+            float w = headLookWeight * _rig.MasterWeight;
+            if (w <= 0.001f) return;
+
+            Vector3 headPos = headBone.position;
+            Vector3 forward = headBone.rotation * (headForwardAxis.sqrMagnitude > 1e-6f ? headForwardAxis.normalized : Vector3.forward);
+            Vector3 handMid = _rig.HandAverage;
+
+            bool rMoving = _rig.IsMoving(ClimbEffector.RightHand);
+            bool lMoving = _rig.IsMoving(ClimbEffector.LeftHand);
+            Vector3 desiredPoint;
+            if (rMoving || lMoving)
+            {
+                Vector3 lead = _rig.GetCurrentPosition(rMoving ? ClimbEffector.RightHand : ClimbEffector.LeftHand);
+                desiredPoint = headLookTarget == HeadLookTarget.MovingHand
+                    ? lead                                                  // look straight at the moving hand
+                    : Vector3.Lerp(handMid, lead, headLookLeadBias);        // between mid and the reaching hand
+            }
+            else
+            {
+                desiredPoint = headLookTarget == HeadLookTarget.MovingHand
+                    ? headPos + forward                                     // animation default (neutral)
+                    : Vector3.Lerp(handMid, headPos + forward, headLookAheadBias);   // between mid and the default forward
+            }
+
+            // Ease the look POINT toward its target — smooths the jump when the lead hand switches or the
+            // head returns to neutral, instead of snapping the gaze.
+            if (!_headLookInit) { _headLookPoint = desiredPoint; _headLookInit = true; }
+            else _headLookPoint = Vector3.Lerp(_headLookPoint, desiredPoint, 1f - Mathf.Exp(-headLookSmooth * Time.deltaTime));
+
+            Vector3 desired = _headLookPoint - headPos;
+            if (desired.sqrMagnitude < 1e-6f) return;
+            Quaternion delta = Quaternion.FromToRotation(forward, desired.normalized);
+            headBone.rotation = Quaternion.Slerp(Quaternion.identity, delta, w) * headBone.rotation;
+        }
+
+        /// <summary>
         /// Forward-probes the surface from the torso and pushes the whole body OUT along the normal when
         /// the trunk is closer than <see cref="desiredStandoff"/> (or the torso is already inside it) —
         /// so the body never clips a bulging/irregular surface. Hands and feet are world-pinned IK
@@ -763,15 +838,29 @@ namespace Game.Climbing
         }
 
         /// <summary>
-        /// Averaged outward normal across the live contact points — both hands plus each planted foot
-        /// (each foot scaled by its IK weight, so dangling feet don't pull the lean). Drives the body
-        /// inclination; falls back to the hand-only normal if nothing is weighted.
+        /// The braced facing rotation (upright, yaw only) from the hold-normal average — flatten the
+        /// into-surface direction to horizontal. Sampled once per hand step (the tween target).
         /// </summary>
-        private Vector3 BodyNormal()
+        private Quaternion ComputeBracedTarget()
         {
-            Vector3 n = _rhOutward + _lhOutward
-                      + (_rfOutward * _rFootWeight + _lfOutward * _lFootWeight) * footLeanInfluence;
-            return n.sqrMagnitude > 1e-4f ? n.normalized : AvgOutward();
+            Vector3 intoFlat = Vector3.ProjectOnPlane(-AvgOutward(), Vector3.up);
+            return intoFlat.sqrMagnitude > 1e-4f
+                ? Quaternion.LookRotation(intoFlat.normalized, Vector3.up)
+                : _bracedBodyRot;
+        }
+
+        /// <summary>
+        /// Starts a braced body-rotation tween from the current facing to the new target, over a duration
+        /// tied to the hand-move time (traverseMoveDuration × bodyTurnDurationScale). Called on each
+        /// successful braced hand step, so the body turns smoothly across the move and slower traversal
+        /// produces gentler turns. Chains naturally if a step starts before the previous tween finishes.
+        /// </summary>
+        private void StartBracedTurn()
+        {
+            _rotTweenFrom = _bracedBodyRot;
+            _rotTweenTo = ComputeBracedTarget();
+            _rotTweenDur = Mathf.Max(0.0001f, traverseMoveDuration * bodyTurnDurationScale);
+            _rotTweenT = 0f;
         }
 
         /// <summary>
@@ -863,10 +952,24 @@ namespace Game.Climbing
 
             Vector2 mv = _input != null ? _input.MoveInput : Vector2.zero;
             if (mv.sqrMagnitude < minMoveInput * minMoveInput) mv = Vector2.zero;
-            _legBlend = Vector2.MoveTowards(_legBlend, mv, climbMoveSmooth * dt);
+
+            // Legs animate only while the character is actually advancing between holds — not when input is
+            // held but traversal is stuck (no reachable hold). A hand step tops up a short hold timer so the
+            // legs keep moving through the gaps between steps; when stepping stops the legs FREEZE where they
+            // were (the blend param holds + ClimbLegsSpeed → 0), instead of returning to the idle pose.
+            if (_rig.AnyMoving) _legMoveTimer = climbLegStopDelay;
+            else _legMoveTimer = Mathf.Max(0f, _legMoveTimer - dt);
+            bool legsMoving = _legMoveTimer > 0f;
+
+            if (legsMoving)
+                _legBlend = Vector2.MoveTowards(_legBlend, mv, climbMoveSmooth * dt);
+            // else: hold _legBlend at its last value — legs stay in their stride pose.
 
             _animator.SetFloat(_hClimbMoveX, _legBlend.x);
             _animator.SetFloat(_hClimbMoveY, _legBlend.y);
+            // Pause the leg clip when frozen so looping stride clips don't keep cycling in place. Hook this
+            // float to the leg blend-tree state's Speed Multiplier in the animator (no-op if not wired).
+            _animator.SetFloat(_hClimbLegsSpeed, legsMoving ? 1f : 0f);
             if (_climbLegsLayerIndex >= 0)
                 _animator.SetLayerWeight(_climbLegsLayerIndex, _rig.MasterWeight * _bracedWeight);
         }
@@ -999,8 +1102,6 @@ namespace Game.Climbing
                 {
                     _rig.SetPoseTarget(foot, hp, hr, footMoveDuration);   // interpolate — no harsh snap
                     SetFootHoldIndex(foot, idx);
-                    if (foot == ClimbEffector.LeftFoot) _lfOutward = hr * Vector3.forward;
-                    else _rfOutward = hr * Vector3.forward;
                     _footCooldown = footStepInterval;
                     FadeFootWeight(foot, 1f, dt);
                 }
@@ -1193,8 +1294,9 @@ namespace Game.Climbing
             // OTHER hand instead. That turns the deadlock (trailing hand caught up to the lead but
             // can't cross, so the lead never gets its turn) into a natural shuffle gait.
             bool primaryRight = Vector3.Dot(rhPos - lhPos, traverseDir) <= 0f;
-            if (TryStepHand(primaryRight, rhPos, lhPos, traverseDir, avgOut)) return;
-            TryStepHand(!primaryRight, rhPos, lhPos, traverseDir, avgOut);
+            if (TryStepHand(primaryRight, rhPos, lhPos, traverseDir, avgOut) ||
+                TryStepHand(!primaryRight, rhPos, lhPos, traverseDir, avgOut))
+                StartBracedTurn();   // begin the per-step rotation tween toward the new facing
         }
 
         /// <summary>

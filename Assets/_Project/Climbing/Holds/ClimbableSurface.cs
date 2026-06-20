@@ -43,9 +43,13 @@ namespace Game.Climbing
                  "(the EditorOnly child is stripped from builds).")]
         [SerializeField] private MeshFilter bakeMeshFilter;
 
+        /// <summary>Where this surface's holds came from — lets systems tell a procedural trunk from a parsed cliff.</summary>
+        public enum ClimbHoldSource { None, Authored, Procedural }
+
         // Runtime hold set: from holdData (authored) or pushed via ReceiveHolds (procedural).
         private IReadOnlyList<ClimbHoldData> _holds = System.Array.Empty<ClimbHoldData>();
         private bool _holdsReady;
+        private ClimbHoldSource _source = ClimbHoldSource.None;
 
         // -- Public read surface (consumed by the streamer / controller / bake) --
         public float FallbackRisk => fallbackRisk;
@@ -56,6 +60,8 @@ namespace Game.Climbing
         public float SearchRadius => searchRadius;
         public IReadOnlyList<ClimbHoldData> Holds => _holds;
         public bool HoldsReady => _holdsReady;
+        /// <summary>Authored = parsed/baked cliff; Procedural = pushed at runtime (e.g. a Flora trunk).</summary>
+        public ClimbHoldSource Source => _source;
 
         /// <summary>
         /// The bake mesh the editor bake tool parses. Resolution order: explicit <see cref="bakeMeshFilter"/>
@@ -82,6 +88,7 @@ namespace Game.Climbing
             {
                 _holds = holdData.holds;
                 _holdsReady = true;
+                _source = ClimbHoldSource.Authored;
             }
         }
 
@@ -93,20 +100,26 @@ namespace Game.Climbing
         {
             _holds = holds ?? System.Array.Empty<ClimbHoldData>();
             _holdsReady = _holds.Count > 0;
+            _source = ClimbHoldSource.Procedural;
         }
 
 #if UNITY_EDITOR
-        // Preview the baked holds in the Scene view (select the surface) — verify a bake without play mode.
-        // Yellow dot = hold, cyan ray = outward grab normal, green ray = surface up.
+        // Preview holds in the Scene view (select the surface). In PLAY mode it draws the LIVE hold set, so
+        // procedural Flora trunks (pushed via ReceiveHolds at growth-complete) show too; in EDIT mode it
+        // falls back to the baked SO so an authored bake previews without entering play. Dot colour = source
+        // (yellow = authored/parsed, magenta = procedural/trunk); cyan ray = outward grab normal, green = up.
         private void OnDrawGizmosSelected()
         {
-            if (holdData == null || holdData.holds == null) return;
-            var hs = holdData.holds;
-            for (int i = 0; i < hs.Length; i++)
+            bool live = Application.isPlaying && _holdsReady;
+            IReadOnlyList<ClimbHoldData> holds = live ? _holds : (holdData != null ? holdData.holds : null);
+            if (holds == null) return;
+
+            Color dot = (live && _source == ClimbHoldSource.Procedural) ? new Color(1f, 0.35f, 1f) : Color.yellow;
+            for (int i = 0; i < holds.Count; i++)
             {
-                Vector3 wp = transform.TransformPoint(hs[i].LocalPosition);
-                Quaternion wr = transform.rotation * hs[i].LocalRotation;
-                Gizmos.color = Color.yellow;
+                Vector3 wp = transform.TransformPoint(holds[i].LocalPosition);
+                Quaternion wr = transform.rotation * holds[i].LocalRotation;
+                Gizmos.color = dot;
                 Gizmos.DrawSphere(wp, 0.04f);
                 Gizmos.color = Color.cyan;
                 Gizmos.DrawRay(wp, (wr * Vector3.forward) * 0.2f);
