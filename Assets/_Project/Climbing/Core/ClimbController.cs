@@ -40,10 +40,14 @@ namespace Game.Climbing
         [SerializeField] private float rootDownOffset = 1.4f;
         [Tooltip("Braced body rotation tweens to its new facing over (traverseMoveDuration × this) on each hand step, so it turns smoothly across the hand move and slower traversal yields gentler turns. Higher = slower/smoother (the turn carries into the next step); lower = snappier.")]
         [SerializeField] private float bodyTurnDurationScale = 1.25f;
+        [Tooltip("On TRUNKS only: align the torso's vertical with the trunk axis (the along-trunk direction at the hands) so 'up' always heads toward the tip however the trunk bends. Off / non-trunk surfaces stay world-up upright.")]
+        [SerializeField] private bool alignTorsoToTrunkAxis = true;
         [Tooltip("Euler offset for the LEFT hand effector rotation (palm against the hold). Often ~ (0,180,0).")]
         [SerializeField] private Vector3 leftHandGripRotation = new Vector3(0f, 180f, 0f);
         [Tooltip("Euler offset for the RIGHT hand effector rotation — mirror of the left; tune to keep the elbow natural.")]
         [SerializeField] private Vector3 rightHandGripRotation = new Vector3(0f, 180f, 0f);
+        [Tooltip("Local position offset of the hand effector at the hold, in the grip frame — shifts the wrist back so the FINGERS sit on the hold instead of the wrist. Applied to both hands.")]
+        [SerializeField] private Vector3 handHoldOffset = Vector3.zero;
         [Tooltip("Forces each arm's elbow toward an explicit down/out bend via FBBIK bend constraints, independent of hand rotation (fixes the mirrored right elbow). 1 = full control.")]
         [Range(0f, 1f)]
         [SerializeField] private float elbowBendWeight = 1f;
@@ -314,6 +318,8 @@ namespace Game.Climbing
         private float _masterWeightTarget;
         private Vector3 _rhOutward = Vector3.forward;  // outward normal of the right-hand hold
         private Vector3 _lhOutward = Vector3.forward;  // outward normal of the left-hand hold
+        private Vector3 _rhUp = Vector3.up;            // up (≈ trunk axis toward the tip) of the right-hand hold
+        private Vector3 _lhUp = Vector3.up;            // up (≈ trunk axis toward the tip) of the left-hand hold
         private ClimbableSurface _currentSurface;     // surface being climbed
         private float _moveCooldown;
 
@@ -499,6 +505,8 @@ namespace Game.Climbing
             }
             _rhOutward = rightOut;
             _lhOutward = leftRot * Vector3.forward;
+            _rhUp = rightRot * Vector3.up;
+            _lhUp = leftRot * Vector3.up;
 
             // Take over.
             _controlLock.RequestExternalControl();
@@ -620,6 +628,17 @@ namespace Game.Climbing
         {
             Vector3 o = _rhOutward + _lhOutward;
             return o.sqrMagnitude > 1e-4f ? o.normalized : _rhOutward;
+        }
+
+        /// <summary>True while climbing a procedural surface (a Flora trunk), where holds carry a trunk-axis up.</summary>
+        private bool IsTrunk =>
+            _currentSurface != null && _currentSurface.Source == ClimbableSurface.ClimbHoldSource.Procedural;
+
+        /// <summary>Average "up" of the two hand holds — the trunk axis toward the tip (used for trunk-aligned orientation).</summary>
+        private Vector3 TrunkUp()
+        {
+            Vector3 u = _rhUp + _lhUp;
+            return u.sqrMagnitude > 1e-4f ? u.normalized : Vector3.up;
         }
 
         /// <summary>
@@ -838,12 +857,24 @@ namespace Game.Climbing
         }
 
         /// <summary>
-        /// The braced facing rotation (upright, yaw only) from the hold-normal average — flatten the
-        /// into-surface direction to horizontal. Sampled once per hand step (the tween target).
+        /// The braced facing rotation, sampled once per hand step (the tween target). Normally upright
+        /// (yaw only) facing the flattened into-surface direction. On a TRUNK (when alignTorsoToTrunkAxis),
+        /// the torso's vertical is aligned to the trunk axis instead, so "up" heads toward the tip however
+        /// the trunk bends.
         /// </summary>
         private Quaternion ComputeBracedTarget()
         {
-            Vector3 intoFlat = Vector3.ProjectOnPlane(-AvgOutward(), Vector3.up);
+            Vector3 avgOut = AvgOutward();
+
+            if (alignTorsoToTrunkAxis && IsTrunk)
+            {
+                Vector3 up = TrunkUp();
+                Vector3 into = Vector3.ProjectOnPlane(-avgOut, up);   // face the trunk, around its axis
+                if (into.sqrMagnitude > 1e-4f)
+                    return Quaternion.LookRotation(into.normalized, up);
+            }
+
+            Vector3 intoFlat = Vector3.ProjectOnPlane(-avgOut, Vector3.up);
             return intoFlat.sqrMagnitude > 1e-4f
                 ? Quaternion.LookRotation(intoFlat.normalized, Vector3.up)
                 : _bracedBodyRot;
@@ -1232,6 +1263,9 @@ namespace Game.Climbing
             _rig.SetRotationOffset(ClimbEffector.RightHand, Quaternion.Euler(rightHandGripRotation));
             _rig.SetRotationOffset(ClimbEffector.LeftFoot, Quaternion.Euler(footGripRotation));
             _rig.SetRotationOffset(ClimbEffector.RightFoot, Quaternion.Euler(Vector3.Scale(footGripRotation, footGripMirror)));
+
+            _rig.SetPositionOffset(ClimbEffector.LeftHand, handHoldOffset);    // wrist→fingers shift at the hold
+            _rig.SetPositionOffset(ClimbEffector.RightHand, handHoldOffset);
         }
 
         /// <summary>
@@ -1277,9 +1311,11 @@ namespace Game.Climbing
             Vector3 avgOut = AvgOutward();
             if (_cam == null && Camera.main != null) _cam = Camera.main.transform;
 
+            // On a trunk, "up" follows the trunk axis (toward the tip) rather than world up.
+            Vector3 upRef = (alignTorsoToTrunkAxis && IsTrunk) ? TrunkUp() : Vector3.up;
             Vector3 camRight = _cam != null ? _cam.right : transform.right;
             Vector3 xDir = Vector3.ProjectOnPlane(camRight, avgOut);
-            Vector3 yDir = Vector3.ProjectOnPlane(Vector3.up, avgOut);
+            Vector3 yDir = Vector3.ProjectOnPlane(upRef, avgOut);
             if (xDir.sqrMagnitude < 1e-4f) xDir = transform.right;
             if (yDir.sqrMagnitude < 1e-4f) yDir = Vector3.Cross(avgOut, xDir);
             Vector3 traverseDir = xDir.normalized * mv.x + yDir.normalized * mv.y;
@@ -1323,8 +1359,8 @@ namespace Game.Climbing
 
             ClimbEffector hand = moveRight ? ClimbEffector.RightHand : ClimbEffector.LeftHand;
             _rig.SetPoseTarget(hand, tp, tr, traverseMoveDuration);
-            if (moveRight) _rhOutward = tr * Vector3.forward;
-            else _lhOutward = tr * Vector3.forward;
+            if (moveRight) { _rhOutward = tr * Vector3.forward; _rhUp = tr * Vector3.up; }
+            else { _lhOutward = tr * Vector3.forward; _lhUp = tr * Vector3.up; }
             _moveCooldown = moveInterval;
             return true;
         }
@@ -1390,7 +1426,8 @@ namespace Game.Climbing
                 return false;
 
             _rig.SetPoseTarget(hand, tp, tr, traverseMoveDuration);
-            if (moveRight) _rhOutward = tr * Vector3.forward; else _lhOutward = tr * Vector3.forward;
+            if (moveRight) { _rhOutward = tr * Vector3.forward; _rhUp = tr * Vector3.up; }
+            else { _lhOutward = tr * Vector3.forward; _lhUp = tr * Vector3.up; }
             _moveCooldown = moveInterval;
             return true;
         }

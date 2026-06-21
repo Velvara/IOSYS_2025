@@ -55,6 +55,10 @@ namespace Game.Climbing
         // Per-effector rotation offset, applied at write time (e.g. live-tunable hand grip).
         private readonly Quaternion[] _rotOffset = new Quaternion[Count];
 
+        // Per-effector LOCAL position offset (in the grip-oriented frame), applied at write time —
+        // e.g. shift the hand effector so the fingers, not the wrist, sit on the hold.
+        private readonly Vector3[] _posOffset = new Vector3[Count];
+
         /// <summary>Master weight, faded 0→1 on grab and 1→0 on release. Scales all effector weights.</summary>
         public float MasterWeight { get; private set; }
 
@@ -106,6 +110,9 @@ namespace Game.Climbing
 
         /// <summary>Per-effector rotation offset applied at write time (e.g. live-tunable hand grip).</summary>
         public void SetRotationOffset(ClimbEffector e, Quaternion offset) => _rotOffset[(int)e] = offset;
+
+        /// <summary>Per-effector LOCAL position offset (grip-oriented frame) applied at write time (e.g. wrist→fingers).</summary>
+        public void SetPositionOffset(ClimbEffector e, Vector3 offset) => _posOffset[(int)e] = offset;
 
         /// <summary>Instantly lock an effector to a fixed world pose (snap-grab with computed hold poses).</summary>
         public void SnapToPose(ClimbEffector e, Vector3 pos, Quaternion rot)
@@ -218,8 +225,9 @@ namespace Game.Climbing
             if (eff == null) return;
 
             float w = MasterWeight * _weight[i];
-            eff.position = _currentPos[i];
-            eff.rotation = _currentRot[i] * _rotOffset[i];
+            Quaternion finalRot = _currentRot[i] * _rotOffset[i];
+            eff.position = _currentPos[i] + finalRot * _posOffset[i];   // offset in the grip-oriented frame
+            eff.rotation = finalRot;
             eff.positionWeight = w;
             eff.rotationWeight = w;
         }
