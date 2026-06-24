@@ -110,6 +110,40 @@ namespace Game.Climbing
         [Tooltip("How fast the body yaw eases toward the per-step facing between hand-steps (visual smoothing of the turn). Higher = snappier.")]
         [SerializeField] private float freeHangTurnSmooth = 8f;
 
+        [Header("Mantle / Reach-Top (automatic top-out)")]
+        [Tooltip("Master toggle for the automatic mantle. Off = the body just stays braced at a near-horizontal top.")]
+        [SerializeField] private bool enableMantle = true;
+        [Tooltip("Allow mantling on Flora tree-trunk (procedural) surfaces. Off = trunks never top-out (you can't stand on a trunk tip); only authored cliffs mantle.")]
+        [SerializeField] private bool mantleOnTrunks = false;
+        [Tooltip("Arm the mantle when Dot(outwardNormal, up) rises ABOVE this — the hand holds face up enough that you're at a near-horizontal TOP edge (e.g. a trunk tip). Positive (≈0.5). NOTE: parsed vertical cliffs have HORIZONTAL hold normals (d≈0), so they top-out via the 'no reachable hold above' test instead.")]
+        [SerializeField] private float mantleEnterDot = 0.5f;
+        [Tooltip("A hold counts as 'above' (still climbable) only if it sits at least this far up the climb axis from the hands. Filters same-row neighbours so reaching a flat top rim still tops out.")]
+        [SerializeField] private float mantleHoldAboveMargin = 0.2f;
+        [Tooltip("If a hold 'above' the hands is within this distance, the climber keeps going (not yet at the top). Beyond it = nothing climbable above → topped out. Keep ≥ your traverse reach.")]
+        [SerializeField] private float mantleReachAbove = 1.0f;
+        [Tooltip("Layers treated as solid world geometry for the mantle probes (the ground you'll stand on + anything that could block standing room). Usually your environment/ground layers.")]
+        [SerializeField] private LayerMask mantleSurfaceMask = ~0;
+        [Tooltip("Up-raycast distance from the hands; this must be CLEAR (nothing overhead at the lip) or the mantle won't fire.")]
+        [SerializeField] private float mantleClearanceUp = 1.2f;
+        [Tooltip("How far horizontally PAST the lip (toward the top platform) to look for the landing surface.")]
+        [SerializeField] private float mantleLandingForward = 0.5f;
+        [Tooltip("Start the landing down-probe this far ABOVE the hand height.")]
+        [SerializeField] private float mantleLandingProbeUp = 1.5f;
+        [Tooltip("How far DOWN the landing probe reaches to find the top surface to stand on.")]
+        [SerializeField] private float mantleLandingProbeDown = 3f;
+        [Tooltip("Seconds to scripted-interpolate the body up and over onto the ledge. Set this to your ClimbUp CLIP LENGTH to sync the move with the animation.")]
+        [SerializeField] private float mantleDuration = 0.6f;
+        [Tooltip("Normalized VERTICAL progress over the mantle: x = 0..1 time → y = 0..1 of the total up move. Shape to your ClimbUp clip's upward root motion (e.g. rise early). Should pass through (0,0) and (1,1).")]
+        [SerializeField] private AnimationCurve mantleUpCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+        [Tooltip("Normalized FORWARD progress (horizontal, toward the ledge): x = 0..1 time → y = 0..1 of the total forward move. Shape to your clip (e.g. hold ~0 during the rise, then move over). Should pass through (0,0) and (1,1).")]
+        [SerializeField] private AnimationCurve mantleForwardCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+        [Tooltip("Hard cap: finalize the mantle even if the OnMantleComplete animation event never fires (guards a missing/mis-placed event from soft-locking the player). Keep ≥ your ClimbUp clip length.")]
+        [SerializeField] private float mantleSafetyTimeout = 1.5f;
+        [Tooltip("After a mantle or a drop, suppress new grab detection for this long so the climber doesn't instantly re-grab.")]
+        [SerializeField] private float regrabCooldown = 0.5f;
+        [Tooltip("On top-out, cross-fade the climb pose (whose ClimbUp clip ends crouched) out to the standing base idle over this many seconds instead of dropping it instantly — avoids a crouch→stand pop. Control stays locked through the fade. 0 = instant (old behaviour). Replace with a real ClimbUp→StandUp clip later for a proper stand-up.")]
+        [SerializeField] private float mantleGetupFade = 0.2f;
+
         [Header("Feet / Bracing (own tuning — legs reach further than arms)")]
         [Tooltip("Hip drop below the hand-average (the foot anchor reference). Pendulum replaces this later.")]
         [SerializeField] private float hipDropFromHands = 0.9f;
@@ -276,6 +310,7 @@ namespace Game.Climbing
         private static readonly int _hIsClimbing = Animator.StringToHash("isClimbing");
         private static readonly int _hClimbHang = Animator.StringToHash("ClimbHang");
         private static readonly int _hFreeHang = Animator.StringToHash("FreeHang");
+        private static readonly int _hClimbUp = Animator.StringToHash("ClimbUp");
         private static readonly int _hIsFreeHang = Animator.StringToHash("IsFreeHang");
         private float _bracedWeight = 1f;   // 1 = braced (legs/foot-IK/standoff active), 0 = free hang
         private Vector3 _freeHangFacing;            // horizontal direction the body faces in free hang (turn target)
@@ -316,6 +351,18 @@ namespace Game.Climbing
         // -- Climb lifecycle --
         private bool _releasing;
         private float _masterWeightTarget;
+
+        // -- Mantle / reach-top (scripted body move onto the ledge, finalized by OnMantleComplete) --
+        private bool _mantling;
+        private float _mantleTimer;
+        private Vector3 _mantleStart, _mantleTarget;
+        private Quaternion _mantleStartRot = Quaternion.identity, _mantleTargetRot = Quaternion.identity;
+        private Vector3 _mantleUpAxis = Vector3.up, _mantleFwdAxis = Vector3.forward;
+        private float _mantleUpDist, _mantleFwdDist;   // signed vertical + horizontal legs of the start→landing move
+        private bool _gettingUp;                       // post-mantle: cross-fading the climb pose out to standing
+        private float _getupTimer;
+        private float _regrabCooldownTimer;
+
         private Vector3 _rhOutward = Vector3.forward;  // outward normal of the right-hand hold
         private Vector3 _lhOutward = Vector3.forward;  // outward normal of the left-hand hold
         private Vector3 _rhUp = Vector3.up;            // up (≈ trunk axis toward the tip) of the right-hand hold
@@ -408,8 +455,10 @@ namespace Game.Climbing
 
         private void Update()
         {
-            // Look for a grab candidate while free (detection-only for now — no grab yet).
-            if (!_isClimbing)
+            if (_regrabCooldownTimer > 0f) _regrabCooldownTimer -= Time.deltaTime;
+
+            // Look for a grab candidate while free (suppressed briefly after a mantle/drop so we don't re-grab).
+            if (!_isClimbing && _regrabCooldownTimer <= 0f)
                 _hasCandidate = TryFindCandidate(out _candidatePos, out _candidateRot, out _candidateSurface);
             else
                 _hasCandidate = false;
@@ -565,6 +614,7 @@ namespace Game.Climbing
         {
             _releasing = true;
             _masterWeightTarget = 0f;
+            _regrabCooldownTimer = regrabCooldown;
             Debug.Log("[ClimbController] Release (fading out).");
         }
 
@@ -590,10 +640,24 @@ namespace Game.Climbing
             // Keep free-look on (ExternalControlState froze it on entry this frame).
             _cameraRig?.SetFrozen(false);
 
+            // Post-mantle get-up: cross-fade the climb pose out to the standing base idle (control still locked).
+            if (_gettingUp) { TickGetup(dt); return; }
+
             // Fade FBBIK weight toward target (in on grab, out on release).
             float dur = _masterWeightTarget > _rig.MasterWeight ? ikFadeInDuration : ikFadeOutDuration;
             float step = dur > 0f ? dt / dur : 1f;
             _rig.SetMasterWeight(Mathf.MoveTowards(_rig.MasterWeight, _masterWeightTarget, step));
+
+            if (_mantling)
+            {
+                // Keep the climb pose layer FULL so the ClimbUp clip plays through while the FBBIK
+                // effector weight fades the hand-pins out; the mantle owns the body transform.
+                if (_animator != null && _climbLayerIndex >= 0)
+                    _animator.SetLayerWeight(_climbLayerIndex, 1f);
+                _rig.Tick(dt);   // push the (now fading) master weight onto the effectors so the hands release
+                TickMantle(dt);
+                return;
+            }
 
             // Drive the climb pose layer in lockstep with the FinalIK weight so the pose appears/clears
             // as the IK fades (the layer WEIGHT reveals climbing — the isClimbing bool alone won't).
@@ -616,6 +680,11 @@ namespace Game.Climbing
             _rig.Tick(dt);
             StepPendulum(dt);
             UpdateBodyPose();
+
+            // Trigger the mantle only AFTER UpdateBodyPose has placed the body for the current hands —
+            // capturing _mantleStart before this froze a stale, pre-hand-step position, so the body snapped
+            // down ~rootDownOffset at the start of the move. Now _mantleStart matches the visible body.
+            if (!_releasing && TryMantle()) return; // reached a top → scripted top-out takes over next frame
 
             _stamina?.SetClimbState(true, _rig.AnyMoving);
 
@@ -929,6 +998,212 @@ namespace Game.Climbing
                 _bracedWeight = free ? 0f : 1f;
                 if (_climbLayerIndex >= 0)
                     _animator.Play(free ? _hFreeHang : _hClimbHang, _climbLayerIndex, 0f);
+            }
+        }
+
+        /// <summary>
+        /// Reach-top check: when the hand holds face far enough UP (we're at a near-horizontal top edge)
+        /// AND there's clear space above + standing room on top, start the mantle. Automatic (brief §2.8).
+        /// Returns true if the mantle took over this frame.
+        /// </summary>
+        private bool TryMantle()
+        {
+            if (!enableMantle || _mantling) return false;
+            if (IsTrunk && !mantleOnTrunks) return false;   // trunks don't top-out (no standable tip)
+            // Two ways to be "at a top": the holds tilt up (trunk tip) OR there's no reachable hold above
+            // (a parsed vertical cliff's top holds face HORIZONTALLY, so the orientation test alone misses it).
+            bool topByOrientation = Vector3.Dot(AvgOutward(), Vector3.up) >= mantleEnterDot;
+            if (!topByOrientation && !AtSurfaceTop()) return false;
+            if (!ComputeMantleLanding(out Vector3 landing, out Quaternion landRot)) return false;
+            BeginMantle(landing, landRot);
+            return true;
+        }
+
+        /// <summary>
+        /// True when no still-climbable hold sits above the hands — i.e. we've run out of up-holds, the
+        /// surface-agnostic "reached the top" signal (works for flat-topped parsed cliffs whose top holds
+        /// face horizontally). "Up" is the trunk axis on a trunk, world-up otherwise.
+        /// </summary>
+        private bool AtSurfaceTop()
+        {
+            if (_currentSurface == null) return false;
+            var holds = _currentSurface.Holds;
+            if (holds == null || holds.Count == 0) return false;
+
+            Vector3 climbUp = IsTrunk ? TrunkUp() : Vector3.up;
+            Vector3 hands = _rig.HandAverage;
+            Transform st = _currentSurface.transform;
+            float reachSqr = mantleReachAbove * mantleReachAbove;
+
+            for (int i = 0; i < holds.Count; i++)
+            {
+                Vector3 delta = st.TransformPoint(holds[i].LocalPosition) - hands;
+                if (Vector3.Dot(delta, climbUp) < mantleHoldAboveMargin) continue;  // not above the hands
+                if (delta.sqrMagnitude <= reachSqr) return false;                   // a reachable up-hold → keep climbing
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Probes for a valid top-out: clear space above the hands, a near-horizontal surface to stand on
+        /// just past the lip, and an unobstructed standing capsule there. All probes use <see cref="mantleSurfaceMask"/>.
+        /// </summary>
+        private bool ComputeMantleLanding(out Vector3 landing, out Quaternion landRot)
+        {
+            landing = Vector3.zero;
+            landRot = transform.rotation;
+
+            Vector3 hands = _rig.HandAverage;
+
+            // The up-ray starts near/inside the player's own capsule, so disable it for the probes — a
+            // self-hit (with a broad mantleSurfaceMask) would otherwise read as "blocked" and veto the mantle.
+            CharacterController cc = _motor?.Controller;
+            bool ccWasEnabled = cc != null && cc.enabled;
+            if (ccWasEnabled) cc.enabled = false;
+            try
+            {
+                // 1) Clear space above the lip — the up-ray must MISS (nothing to climb into).
+                if (Physics.Raycast(hands, Vector3.up, mantleClearanceUp, mantleSurfaceMask, QueryTriggerInteraction.Ignore))
+                    return false;
+
+                // 2) Find the top surface just past the lip (horizontal "inward" = toward the platform).
+                Vector3 inwardFlat = Vector3.ProjectOnPlane(-AvgOutward(), Vector3.up);
+                inwardFlat = inwardFlat.sqrMagnitude > 1e-4f
+                    ? inwardFlat.normalized
+                    : Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
+                Vector3 probeXZ = hands + inwardFlat * mantleLandingForward;
+                Vector3 probeTop = probeXZ + Vector3.up * mantleLandingProbeUp;
+                if (!Physics.Raycast(probeTop, Vector3.down, out RaycastHit hit,
+                                     mantleLandingProbeUp + mantleLandingProbeDown,
+                                     mantleSurfaceMask, QueryTriggerInteraction.Ignore))
+                    return false;
+                // Reject a near-vertical "top" (we hit a wall, not a ledge surface to stand on).
+                if (Vector3.Angle(hit.normal, Vector3.up) > 50f) return false;
+
+                // 3) Standing room: an unobstructed capsule at the landing.
+                float r = cc != null ? cc.radius : 0.3f;
+                float h = cc != null ? Mathf.Max(cc.height, 2f * r) : 1.8f;
+                Vector3 footPt = hit.point + Vector3.up * (r + 0.02f);
+                Vector3 headPt = hit.point + Vector3.up * (h - r);
+                if (Physics.CheckCapsule(footPt, headPt, r * 0.95f, mantleSurfaceMask, QueryTriggerInteraction.Ignore))
+                    return false;
+
+                landing = hit.point;                              // controller pivot sits at the feet
+                landRot = Quaternion.LookRotation(inwardFlat, Vector3.up);
+            }
+            finally
+            {
+                if (ccWasEnabled) cc.enabled = true;
+            }
+            return true;
+        }
+
+        /// <summary>Starts the scripted top-out: capture start/landing, play ClimbUp, begin fading the IK out.</summary>
+        private void BeginMantle(Vector3 landing, Quaternion landRot)
+        {
+            _mantling = true;
+            _mantleTimer = 0f;
+            _mantleStart = transform.position;
+            _mantleTarget = landing;
+            _mantleStartRot = transform.rotation;
+            _mantleTargetRot = landRot;
+
+            // Split start→landing into a vertical and a horizontal (forward) leg so each can be shaped
+            // independently by its curve (classic up-then-over mantle, sync-able to the ClimbUp clip).
+            Vector3 delta = _mantleTarget - _mantleStart;
+            _mantleUpAxis = Vector3.up;
+            _mantleUpDist = delta.y;
+            Vector3 horiz = new Vector3(delta.x, 0f, delta.z);
+            _mantleFwdDist = horiz.magnitude;
+            _mantleFwdAxis = _mantleFwdDist > 1e-4f ? horiz / _mantleFwdDist : transform.forward;
+
+            // Feet/legs stop driving; the ClimbUp clip owns the pose while we translate.
+            _rig.SetEffectorWeight(ClimbEffector.LeftFoot, 0f);
+            _rig.SetEffectorWeight(ClimbEffector.RightFoot, 0f);
+            _lFootWeight = _rFootWeight = 0f;
+            _lFootLocked = _rFootLocked = false;
+            if (_animator != null && _climbLegsLayerIndex >= 0)
+                _animator.SetLayerWeight(_climbLegsLayerIndex, 0f);
+
+            // Fade the FBBIK effectors out over the move so the cosmetic ClimbUp clip reads through.
+            _masterWeightTarget = 0f;
+            if (_animator != null && _climbLayerIndex >= 0)
+            {
+                if (_animator.HasState(_climbLayerIndex, _hClimbUp))
+                    _animator.CrossFade(_hClimbUp, ikFadeOutDuration, _climbLayerIndex, 0f);
+                else
+                    Debug.LogWarning("[ClimbController] No 'ClimbUp' state found on the 'ClimbingLayer' — " +
+                        "the mantle clip won't play (the scripted move still runs). It must be named exactly " +
+                        "'ClimbUp' and be a TOP-LEVEL state in the ClimbingLayer (not inside a sub-state-machine, " +
+                        "not on another layer). No transitions are needed — CrossFade drives it directly.");
+            }
+
+            Debug.Log($"[ClimbController] Mantle start → landing {landing}.");
+        }
+
+        /// <summary>Scripted body move onto the ledge; finalized by OnMantleComplete (or the safety timeout).</summary>
+        private void TickMantle(float dt)
+        {
+            _mantleTimer += dt;
+            float t = mantleDuration > 0f ? Mathf.Clamp01(_mantleTimer / mantleDuration) : 1f;
+
+            // Vertical and forward driven by SEPARATE curves so "rise first, then move over" is authorable
+            // and the timing matches the ClimbUp clip (mantleDuration = clip length).
+            float up = mantleUpCurve.Evaluate(t);
+            float fwd = mantleForwardCurve.Evaluate(t);
+            transform.position = _mantleStart + _mantleUpAxis * (_mantleUpDist * up)
+                                              + _mantleFwdAxis * (_mantleFwdDist * fwd);
+            transform.rotation = Quaternion.Slerp(_mantleStartRot, _mantleTargetRot, Mathf.SmoothStep(0f, 1f, t));
+
+            if (_mantleTimer >= mantleSafetyTimeout) FinishMantle();
+        }
+
+        /// <summary>Animation event at the end of the ClimbUp clip — hands control back to the FSM, standing on top.</summary>
+        public void OnMantleComplete()
+        {
+            if (_mantling) FinishMantle();
+        }
+
+        /// <summary>Completes the top-out: snap to the landing, zero vertical velocity, cool down re-grab, release control.</summary>
+        private void FinishMantle()
+        {
+            transform.position = _mantleTarget;
+            transform.rotation = _mantleTargetRot;
+            _mantling = false;
+            _motor?.SetVerticalVelocity(0f);
+            _regrabCooldownTimer = regrabCooldown;
+
+            // Cross-fade the climb pose (ClimbUp ends crouched) out to the standing base idle instead of
+            // dropping the layer instantly — control stays locked (_isClimbing true) until the fade ends.
+            if (mantleGetupFade > 0f && _animator != null && _climbLayerIndex >= 0)
+            {
+                _gettingUp = true;
+                _getupTimer = 0f;
+                Debug.Log("[ClimbController] Mantle complete — fading climb pose out to stand.");
+            }
+            else
+            {
+                FinishRelease();   // isClimbing=false, layer weights 0, ReleaseExternalControl
+                Debug.Log("[ClimbController] Mantle complete — standing on top.");
+            }
+        }
+
+        /// <summary>
+        /// Post-mantle stop-gap: fades the ClimbingLayer weight 1→0 so the crouched ClimbUp end pose blends
+        /// into the standing base idle (no hard pop). Control is held (external control still active) until
+        /// the fade completes, then control returns. Superseded later by a real ClimbUp→StandUp clip.
+        /// </summary>
+        private void TickGetup(float dt)
+        {
+            _getupTimer += dt;
+            float t = mantleGetupFade > 0f ? Mathf.Clamp01(_getupTimer / mantleGetupFade) : 1f;
+            if (_animator != null && _climbLayerIndex >= 0)
+                _animator.SetLayerWeight(_climbLayerIndex, 1f - t);
+
+            if (t >= 1f)
+            {
+                _gettingUp = false;
+                FinishRelease();   // isClimbing=false, layer weights 0, ReleaseExternalControl
             }
         }
 
