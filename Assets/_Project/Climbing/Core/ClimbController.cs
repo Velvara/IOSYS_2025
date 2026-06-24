@@ -754,7 +754,8 @@ namespace Game.Climbing
             // sin(step angle) sideways around the trunk each step (a snap the camera follows, independent of
             // rotation/pendulum). Tying it to _bracedBodyRot makes the standoff follow the same smooth turn.
             Vector3 facingOut = -(_bracedBodyRot * Vector3.forward);
-            Vector3 rigidPos = _rig.HandAverage + facingOut * rootForwardOffset - Vector3.up * rootDownOffset;
+            Vector3 hangDir = (alignTorsoToTrunkAxis && IsTrunk) ? -TrunkUp() : Vector3.down;
+            Vector3 rigidPos = _rig.HandAverage + facingOut * rootForwardOffset + hangDir * rootDownOffset;
             Vector3 bracedPos = usePendulum && _pendulum != null
                 ? Vector3.Lerp(rigidPos, _pendulum.LowerPos + facingOut * rootForwardOffset, pendulumWeight)
                 : rigidPos;
@@ -777,6 +778,12 @@ namespace Game.Climbing
             _pendulum.Stiffness = pendulumStiffness;
             _pendulum.Damping = pendulumDamping;
             _pendulum.AnchorToUpper = _pendulum.UpperToLower = rootDownOffset * 0.5f;  // rest = rigid drop
+
+            // Hang along the TRUNK AXIS when braced on a bent trunk (so the body sits alongside a horizontal
+            // limb instead of dropping straight down through it); blend back to world-down in free hang
+            // (where real gravity should hang you below an overhang). Non-trunks: always world-down.
+            Vector3 trunkDown = (alignTorsoToTrunkAxis && IsTrunk) ? -TrunkUp() : Vector3.down;
+            _pendulum.GravityDir = Vector3.Slerp(Vector3.down, trunkDown, _bracedWeight);
         }
 
         /// <summary>Advances the body pendulum one step, anchored to the live hand-average.</summary>
@@ -813,13 +820,16 @@ namespace Game.Climbing
             // In FREE HANG the torso must not pitch toward the arms — keep only the LATERAL (sideways)
             // part of the swing and drop the fore/aft component along the body's forward axis. Braced
             // keeps the full swing. (_bracedWeight: 1 = braced/full, 0 = free/lateral-only.)
+            // Measure the swing from the pendulum's REST (hang) direction, not world-down — on a bent trunk
+            // the hang is along the trunk axis, so this keeps rest = identity (no bogus static spine lean).
+            Vector3 restDir = _pendulum.GravityDir.sqrMagnitude > 1e-6f ? _pendulum.GravityDir.normalized : Vector3.down;
             Vector3 dir = _pendulum.UpperDir;
             Vector3 lateral = Vector3.ProjectOnPlane(dir, transform.forward);
             dir = lateral.sqrMagnitude > 1e-5f
                 ? Vector3.Slerp(lateral.normalized, dir, _bracedWeight)
-                : Vector3.Slerp(Vector3.down, dir, _bracedWeight);   // pure fore/aft swing → straight down in free hang
+                : Vector3.Slerp(restDir, dir, _bracedWeight);   // pure fore/aft swing → rest (hang) dir in free hang
 
-            Quaternion swing = Quaternion.FromToRotation(Vector3.down, dir);
+            Quaternion swing = Quaternion.FromToRotation(restDir, dir);
 
             if (spineBoneLower != null)
             {

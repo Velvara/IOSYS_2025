@@ -26,6 +26,10 @@ namespace Game.Climbing
         /// <summary>Velocity damping (higher = settles faster, less swing).</summary>
         public float Damping = 4f;
         public float Gravity = 9.81f;
+        /// <summary>Unit "down" the masses hang toward. World <see cref="Vector3.down"/> normally; the
+        /// climber points it along the trunk axis (−TrunkUp) when braced on a bent trunk so the body
+        /// hangs along the limb instead of straight down through it.</summary>
+        public Vector3 GravityDir = Vector3.down;
 
         // -- State --
         public Vector3 Anchor { get; private set; }
@@ -39,8 +43,9 @@ namespace Game.Climbing
         public void Reset(Vector3 anchor)
         {
             Anchor = anchor;
-            UpperPos = anchor + Vector3.down * AnchorToUpper;
-            LowerPos = UpperPos + Vector3.down * UpperToLower;
+            Vector3 down = GravityDir.sqrMagnitude > 1e-6f ? GravityDir.normalized : Vector3.down;
+            UpperPos = anchor + down * AnchorToUpper;
+            LowerPos = UpperPos + down * UpperToLower;
             _vUpper = _vLower = Vector3.zero;
             _initialized = true;
         }
@@ -53,18 +58,19 @@ namespace Game.Climbing
             if (!_initialized) { Reset(Anchor); return; }
             if (dt <= 0f) return;
 
-            Vector3 g = Vector3.down * Gravity;
+            Vector3 down = GravityDir.sqrMagnitude > 1e-6f ? GravityDir.normalized : Vector3.down;
+            Vector3 g = down * Gravity;
 
             // Segment 1: anchor -> upper mass.
             Vector3 d1 = UpperPos - Anchor;
             float len1 = d1.magnitude;
-            Vector3 n1 = len1 > 1e-5f ? d1 / len1 : Vector3.down;
+            Vector3 n1 = len1 > 1e-5f ? d1 / len1 : down;
             Vector3 spring1 = -Stiffness * (len1 - AnchorToUpper) * n1;
 
             // Segment 2: upper mass -> lower mass.
             Vector3 d2 = LowerPos - UpperPos;
             float len2 = d2.magnitude;
-            Vector3 n2 = len2 > 1e-5f ? d2 / len2 : Vector3.down;
+            Vector3 n2 = len2 > 1e-5f ? d2 / len2 : down;
             Vector3 spring2 = -Stiffness * (len2 - UpperToLower) * n2;
 
             // Upper mass feels spring1 (toward anchor), the reaction of spring2, gravity, damping.
