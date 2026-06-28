@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using Unity.Cinemachine;
 using RootMotion.FinalIK;
 using Game.PlayerV2;
 using Game.PlayerV2.Systems;
@@ -143,6 +144,48 @@ namespace Game.Climbing
         [SerializeField] private float regrabCooldown = 0.5f;
         [Tooltip("On top-out, cross-fade the climb pose (whose ClimbUp clip ends crouched) out to the standing base idle over this many seconds instead of dropping it instantly — avoids a crouch→stand pop. Control stays locked through the fade. 0 = instant (old behaviour). Replace with a real ClimbUp→StandUp clip later for a proper stand-up.")]
         [SerializeField] private float mantleGetupFade = 0.2f;
+
+        [Header("Reach-Bottom (auto step-off near ground)")]
+        [Tooltip("Auto-release the climb when the body gets within reachBottomDistance of solid ground (stepping off at the bottom). Probes downward against mantleSurfaceMask.")]
+        [SerializeField] private bool enableReachBottom = true;
+        [Tooltip("Release when ground is within this distance below the body. Only checked once the grab has fully faded in (won't fire mid-grab).")]
+        [SerializeField] private float reachBottomDistance = 0.5f;
+
+        [Header("BracedReady (Cancel peek)")]
+        [Tooltip("Body yaw (deg) toward the released-hand side — applied as a grip-preserving ROOT rotation. Keep MODEST: the gripping arm must still reach its hold (too high over-stretches the arm). The head angle carries the rest of the 'look away'.")]
+        [SerializeField] private float bracedReadyTorsoAngle = 30f;
+        [Tooltip("Additional HEAD yaw (deg) on top of the body turn (post-solve, drags no hand — can be large to land the gaze away from the wall).")]
+        [SerializeField] private float bracedReadyHeadAngle = 75f;
+        [Tooltip("Seconds to ease into / out of the BracedReady turn.")]
+        [SerializeField] private float bracedReadyTurnDuration = 0.3f;
+        [Tooltip("Flip if the torso/head turn goes the wrong way for your rig (rotation axis convention).")]
+        [SerializeField] private bool bracedReadyTurnInvert = false;
+        [Tooltip("Local position offset (hold grip frame) eased onto the LOOSENED hand in BracedReady — author where the let-go hand sits (e.g. pulled back/down off the wall). Zero = stays on the hold.")]
+        [SerializeField] private Vector3 loosenedHandOffset = Vector3.zero;
+        [Tooltip("Local rotation offset (euler, grip frame) eased onto the LOOSENED hand in BracedReady — relax/rotate the let-go hand. Twists the wrist IN PLACE (decoupled from loosenedHandOffset, so re-angling won't slide the hand). Authored for the LEFT hand; mirrored for the right via loosenedHandMirror.")]
+        [SerializeField] private Vector3 loosenedHandRotation = Vector3.zero;
+        [Tooltip("Per-axis mirror (×) applied to the loosened POSITION offset for the RIGHT hand (values authored for the left). Default mirrors X (left↔right).")]
+        [SerializeField] private Vector3 loosenedHandOffsetMirror = new Vector3(-1f, 1f, 1f);
+        [Tooltip("Per-axis mirror (×) applied to the loosened ROTATION euler for the RIGHT hand (values authored for the left). Tuned SEPARATELY from the position mirror — a proper rotation mirror usually needs different signs (e.g. (1,-1,-1)).")]
+        [SerializeField] private Vector3 loosenedHandRotationMirror = new Vector3(1f, -1f, -1f);
+        [Tooltip("Anchor the loosened-hand POSITION relative to the HEAD bone (loosenedHandOffset becomes a head-LOCAL point) instead of the hold — the hand follows the head/upper body as it turns, instead of staying at the wall hold. Rotation is unaffected.")]
+        [SerializeField] private bool loosenedHandAnchorHead = false;
+
+        [Header("BracedReady Camera (peek framing)")]
+        [Tooltip("ThirdPersonFollow on the climbing vcam — the peek drives its ShoulderOffset.x + CameraSide directly. Assign in the inspector.")]
+        [SerializeField] private CinemachineThirdPersonFollow peekVcamFollow;
+        [Tooltip("PlayerCameraRoot transform (= PlayerCameraRig's follow target). Rotated to the peek yaw while the rig is frozen. Assign in the inspector.")]
+        [SerializeField] private Transform peekCameraRoot;
+        [Tooltip("Camera-root local Y yaw (deg) at full peek (+ for LEFT peek, − for right).")]
+        [SerializeField] private float peekRootYaw = 90f;
+        [Tooltip("ThirdPersonFollow ShoulderOffset.x at full peek (same for both sides).")]
+        [SerializeField] private float peekShoulderX = 1f;
+        [Tooltip("ThirdPersonFollow CameraSide at full peek (+ for LEFT, − for right). Check your Cinemachine's CameraSide range (may be 0..1) and adjust.")]
+        [SerializeField] private float peekCameraSide = 1f;
+        [Tooltip("Look-X magnitude past the OPPOSITE side that swaps the peek (latched; ignored while a turn is mid-transition).")]
+        [SerializeField] private float sideToggleThreshold = 0.5f;
+        [Tooltip("Local offset (from the player root) for the runtime swap MID-POINT anchor — the camera swings THROUGH this point during a side-swap. Default (0,0,-1) = behind the player so the camera orbits around the back. Created/positioned on peek entry, disabled on exit.")]
+        [SerializeField] private Vector3 peekSwapAnchorOffset = new Vector3(0f, 0f, -1f);
 
         [Header("Feet / Bracing (own tuning — legs reach further than arms)")]
         [Tooltip("Hip drop below the hand-average (the foot anchor reference). Pendulum replaces this later.")]
@@ -301,6 +344,7 @@ namespace Game.Climbing
         private PlayerStamina _stamina;
         private PlayerCameraRig _cameraRig;
         private InputHandler _input;
+        private PlayerInput _playerInput;   // for direct Use/Cancel/Jump action subscriptions (climb-specific)
         private Transform _cam;   // gameplay camera, for camera-relative traversal input
 
         // -- Animator (climb pose layer) --
@@ -363,6 +407,21 @@ namespace Game.Climbing
         private float _getupTimer;
         private float _regrabCooldownTimer;
 
+        // -- BracedReady (Cancel peek sub-state) --
+        private enum ClimbMode { Climbing, BracedReady }
+        private ClimbMode _mode = ClimbMode.Climbing;
+        private int _readySign;             // +1 = LEFT hand released (turn left); -1 = RIGHT hand released (turn right)
+        private float _readyT;              // 0 = squared (climbing), 1 = fully turned into BracedReady
+        private bool _readyReturning;       // easing _readyT back to 0 (return to climbing OR un-turn for a side-swap)
+        private bool _pendingSwap;          // the un-turn is a side-swap → flip side + re-peek at _readyT==0
+        private bool _pendulumFrozen;       // body pendulum held at rest (BracedReady)
+        private bool _cameraOverridden;     // BracedReady owns the camera (rig frozen, framing driven directly)
+        private bool _camMidSwap;           // a side-swap is routing the camera through the mid-point anchor
+        private Transform _swapAnchor;      // runtime mid-point the camera swings through during a swap
+        private Vector3 _camSnapShoulder;
+        private float _camSnapSide;
+        private Quaternion _camSnapRootLocal = Quaternion.identity;
+
         private Vector3 _rhOutward = Vector3.forward;  // outward normal of the right-hand hold
         private Vector3 _lhOutward = Vector3.forward;  // outward normal of the left-hand hold
         private Vector3 _rhUp = Vector3.up;            // up (≈ trunk axis toward the tip) of the right-hand hold
@@ -392,6 +451,7 @@ namespace Game.Climbing
             _stamina = GetComponentInParent<PlayerStamina>();
             _cameraRig = GetComponentInParent<PlayerCameraRig>();
             _input = GetComponentInParent<InputHandler>();
+            _playerInput = GetComponentInParent<PlayerInput>();
             if (Camera.main != null) _cam = Camera.main.transform;
 
             _animator = GetComponentInParent<Animator>();
@@ -423,6 +483,8 @@ namespace Game.Climbing
                 Debug.LogError("[ClimbController] No IPlayerMotor found on the player hierarchy.");
             if (ik == null)
                 Debug.LogError("[ClimbController] No FullBodyBipedIK found on the player — assign it or add one.");
+            if (_playerInput == null)
+                Debug.LogWarning("[ClimbController] No PlayerInput found — Use/Cancel climb inputs won't work (debug key still does).");
 
             _oscillators = new OscillatorBank();
             _pendulum = new TwoMassPendulum();
@@ -438,7 +500,18 @@ namespace Game.Climbing
                 ik.solver.OnPreUpdate += SmearFeet;     // read animated feet → cast → set effectors
                 ik.solver.OnPostUpdate += TwistSpine;   // lean the chest after the solve (final override)
                 ik.solver.OnPostUpdate += HeadLook;     // turn the head after the spine twist (final override)
+                ik.solver.OnPostUpdate += ApplyBracedReadyTurn;   // peek turn on top of everything
                 _smearHooked = true;
+            }
+
+            // Climb-specific inputs straight off PlayerInput (InputHandler is locomotion-only). Use = grab/return;
+            // Cancel = exit (or, when braced, enter BracedReady — wired in a later increment).
+            if (_playerInput != null && _playerInput.actions != null)
+            {
+                var use = _playerInput.actions["Use"];
+                if (use != null) use.performed += OnUseInput;
+                var cancel = _playerInput.actions["Cancel"];
+                if (cancel != null) cancel.performed += OnCancelInput;
             }
         }
 
@@ -449,8 +522,41 @@ namespace Game.Climbing
                 ik.solver.OnPreUpdate -= SmearFeet;
                 ik.solver.OnPostUpdate -= TwistSpine;
                 ik.solver.OnPostUpdate -= HeadLook;
+                ik.solver.OnPostUpdate -= ApplyBracedReadyTurn;
                 _smearHooked = false;
             }
+
+            if (_playerInput != null && _playerInput.actions != null)
+            {
+                var use = _playerInput.actions["Use"];
+                if (use != null) use.performed -= OnUseInput;
+                var cancel = _playerInput.actions["Cancel"];
+                if (cancel != null) cancel.performed -= OnCancelInput;
+            }
+        }
+
+        /// <summary>Use: toggle BracedReady while braced-climbing (enter ↔ return), or grab a climbable when free.</summary>
+        private void OnUseInput(InputAction.CallbackContext ctx)
+        {
+            if (_isClimbing)
+            {
+                if (_releasing || _mantling || _gettingUp) return;
+                if (_mode == ClimbMode.BracedReady)
+                    _readyReturning = !_readyReturning;     // toggle: peek ↔ return-to-climbing (responsive mid-ease)
+                else if (!_freeHang)
+                    EnterBracedReady();                     // braced → peek
+                return;
+            }
+            if (!_hasCandidate || _regrabCooldownTimer > 0f) return;
+            if (_input != null && _input.AimHeld) return;   // Use fires a tool while aiming — don't also grab
+            Grab();
+        }
+
+        /// <summary>Cancel: exit the climb (drop) from any climbing state — braced, BracedReady, or free-hang.</summary>
+        private void OnCancelInput(InputAction.CallbackContext ctx)
+        {
+            if (!_isClimbing || _releasing || _mantling || _gettingUp) return;
+            BeginRelease();
         }
 
         private void Update()
@@ -584,6 +690,13 @@ namespace Game.Climbing
             _lFootLocked = _rFootLocked = false;
             _footSmoothInit[0] = _footSmoothInit[1] = false;
             _pendulumAccumulator = 0f;
+            _mode = ClimbMode.Climbing;
+            _readyT = 0f;
+            _readyReturning = false;
+            _pendingSwap = false;
+            _pendulumFrozen = false;
+            _cameraOverridden = false;
+            _camMidSwap = false;
             ApplyGripOffset();
 
             _freeHangFacing = intoFlat.sqrMagnitude > 1e-4f ? intoFlat.normalized : transform.forward;
@@ -612,9 +725,13 @@ namespace Game.Climbing
 
         private void BeginRelease()
         {
+            if (_cameraOverridden) RestoreBracedReadyCamera();   // exiting from a peek → hand the camera back
             _releasing = true;
             _masterWeightTarget = 0f;
             _regrabCooldownTimer = regrabCooldown;
+            // Hand back to gravity from REST — the motor froze _verticalVelocity at grab time (often a fast
+            // fall value), so without this the drop resumes mid-fall instead of ramping like a ledge step-off.
+            _motor?.SetVerticalVelocity(0f);
             Debug.Log("[ClimbController] Release (fading out).");
         }
 
@@ -622,6 +739,13 @@ namespace Game.Climbing
         {
             _isClimbing = false;
             _releasing = false;
+            if (_cameraOverridden) RestoreBracedReadyCamera();   // safety: never leave the rig frozen
+            _mode = ClimbMode.Climbing;          // clear any BracedReady sub-state
+            _readyT = 0f;
+            _readyReturning = false;
+            _pendingSwap = false;
+            _pendulumFrozen = false;
+            _camMidSwap = false;
             _rig.SetMasterWeight(0f);
             SetArmBendDirections(0f);            // hand the arm bend back to FBBIK's default
             SetLegBendDirections(0f);            // hand the knee bend back too
@@ -637,8 +761,9 @@ namespace Game.Climbing
         /// <summary>Per-frame climb update: free-look, IK weight fade, effector tick, body follow.</summary>
         private void TickClimb(float dt)
         {
-            // Keep free-look on (ExternalControlState froze it on entry this frame).
-            _cameraRig?.SetFrozen(false);
+            // Keep free-look on (ExternalControlState froze it on entry) — EXCEPT in BracedReady, where the
+            // peek owns the camera (frozen + driven directly).
+            if (!_cameraOverridden) _cameraRig?.SetFrozen(false);
 
             // Post-mantle get-up: cross-fade the climb pose out to the standing base idle (control still locked).
             if (_gettingUp) { TickGetup(dt); return; }
@@ -671,9 +796,14 @@ namespace Game.Climbing
             SetArmBendDirections(elbowBendWeight);
             if (!_releasing)
             {
-                HandleTraversal(dt);
-                UpdateFeet(dt);          // plant/dangle each foot for this frame's Tick
-                UpdatePoseSwitch();
+                if (_mode == ClimbMode.BracedReady)
+                    TickBracedReady(dt);   // peek: movement locked, ease the turn, fade the released hand
+                else
+                {
+                    HandleTraversal(dt);
+                    UpdateFeet(dt);          // plant/dangle each foot for this frame's Tick
+                    UpdatePoseSwitch();
+                }
             }
             SetLegBendDirections(Mathf.Max(_lFootWeight, _rFootWeight) * kneeBendWeight);
 
@@ -684,7 +814,8 @@ namespace Game.Climbing
             // Trigger the mantle only AFTER UpdateBodyPose has placed the body for the current hands —
             // capturing _mantleStart before this froze a stale, pre-hand-step position, so the body snapped
             // down ~rootDownOffset at the start of the move. Now _mantleStart matches the visible body.
-            if (!_releasing && TryMantle()) return; // reached a top → scripted top-out takes over next frame
+            if (!_releasing && _mode == ClimbMode.Climbing && TryMantle()) return; // reached a top → top-out
+            if (!_releasing && _mode == ClimbMode.Climbing && TryReachBottom()) return; // near ground → step off
 
             _stamina?.SetClimbState(true, _rig.AnyMoving);
 
@@ -747,6 +878,16 @@ namespace Game.Climbing
 
             transform.rotation = Quaternion.Slerp(_freeHangBodyRot, _bracedBodyRot, _bracedWeight);
 
+            // BracedReady peek: yaw the WHOLE BODY toward the released side as a ROOT rotation (PRE-solve) so
+            // FBBIK keeps the gripping hand ON its world-space hold — a post-solve bone turn drags it off.
+            // Keep this angle modest (the arms must still reach the holds); the rest of the "look away from the
+            // wall" comes from the head turn (ApplyBracedReadyTurn).
+            if (_mode == ClimbMode.BracedReady && _readyT > 0.001f)
+            {
+                float sign = bracedReadyTurnInvert ? -_readySign : _readySign;
+                transform.rotation = Quaternion.AngleAxis(bracedReadyTorsoAngle * _readyT * sign, transform.up) * transform.rotation;
+            }
+
             // ---- Position ----
             // BRACED: rigid drop (restore-point) vs pendulum hang (lower mass swings below the moving hands).
             // The standoff offset uses the SMOOTHED facing's outward (from the rotation tween), NOT the raw
@@ -789,7 +930,7 @@ namespace Game.Climbing
         /// <summary>Advances the body pendulum one step, anchored to the live hand-average.</summary>
         private void StepPendulum(float dt)
         {
-            if (!usePendulum || _pendulum == null) return;
+            if (!usePendulum || _pendulum == null || _pendulumFrozen) return;   // frozen at rest in BracedReady
             ConfigurePendulum();                 // live-tunable
             _pendulum.SetAnchor(_rig.HandAverage);
 
@@ -855,7 +996,9 @@ namespace Game.Climbing
         private void HeadLook()
         {
             if (!_isClimbing || headBone == null || _rig == null) return;
-            float w = headLookWeight * _rig.MasterWeight;
+            // Fade the look-at out as the BracedReady peek turns in (ApplyBracedReadyTurn owns the head then).
+            float readyFade = _mode == ClimbMode.BracedReady ? (1f - _readyT) : 1f;
+            float w = headLookWeight * _rig.MasterWeight * readyFade;
             if (w <= 0.001f) return;
 
             Vector3 headPos = headBone.position;
@@ -1009,6 +1152,214 @@ namespace Game.Climbing
                 if (_climbLayerIndex >= 0)
                     _animator.Play(free ? _hFreeHang : _hClimbHang, _climbLayerIndex, 0f);
             }
+        }
+
+        /// <summary>Cancel while braced: release the LOWEST hand (visual only — body pose keeps using BOTH holds),
+        /// turn the upper torso/head toward it (gaze ~away from the wall), freeze the pendulum. Movement locks
+        /// until Use (return) / Cancel (exit) / Jump (later increment).</summary>
+        private void EnterBracedReady()
+        {
+            // Side = inverse of the camera look direction (dev preference): looking toward body-right → peek
+            // LEFT (release left hand); looking left or straight → peek RIGHT.
+            Vector3 lookFwd = peekCameraRoot != null ? peekCameraRoot.forward
+                            : (_cam != null ? _cam.forward : transform.forward);
+            bool releaseLeft = Vector3.Dot(lookFwd, transform.right) > 0f;
+            _readySign = releaseLeft ? +1 : -1;
+            _mode = ClimbMode.BracedReady;
+            _readyReturning = false;
+            _pendingSwap = false;
+            _pendulumFrozen = true;
+            _pendulum?.Reset(_rig.HandAverage);   // settle the pendulum so the body holds still
+            EnableSwapAnchor();                   // place the swap mid-point BEFORE the camera starts moving
+            SnapshotBracedReadyCamera();          // freeze the rig + capture framing to restore on exit
+            Debug.Log($"[ClimbController] BracedReady — releasing {(releaseLeft ? "LEFT" : "RIGHT")} hand.");
+        }
+
+        /// <summary>BracedReady per-frame: ease the turn in/out, fade the released hand's IK pin, keep feet planted.</summary>
+        private void TickBracedReady(float dt)
+        {
+            // Clear the swap routing once the (re-)turn has fully settled (so the next Use-return uses the snapshot).
+            if (_camMidSwap && !_readyReturning && _readyT >= 0.999f) _camMidSwap = false;
+
+            // Side-swap: once the peek is settled, pushing look PAST the opposite-side threshold un-turns this
+            // side then re-peeks the other (latched; ignored mid-transition so a turn can't be interrupted).
+            if (!_readyReturning && _readyT >= 0.999f && _input != null)
+            {
+                float lx = _input.LookInput.x;
+                bool swap = (_readySign > 0 && lx > sideToggleThreshold) || (_readySign < 0 && lx < -sideToggleThreshold);
+                if (swap) { _readyReturning = true; _pendingSwap = true; _camMidSwap = true; }
+            }
+
+            float target = _readyReturning ? 0f : 1f;
+            _readyT = Mathf.MoveTowards(_readyT, target, dt / Mathf.Max(0.0001f, bracedReadyTurnDuration));
+
+            // The loosened hand stays IK-driven but eases to an AUTHORED offset from its hold (composed on top
+            // of the per-hand grip offset), so you control exactly where the let-go hand sits. HandAverage
+            // still reads the un-offset effector targets, so the body pose is unaffected.
+            ClimbEffector released = _readySign > 0 ? ClimbEffector.LeftHand : ClimbEffector.RightHand;
+            bool isRight = released == ClimbEffector.RightHand;
+            // Chiral: the loosened offset + rotation are authored for the LEFT hand; mirror them for the right.
+            Vector3 looseOff = isRight ? Vector3.Scale(loosenedHandOffset, loosenedHandOffsetMirror) : loosenedHandOffset;
+            Vector3 looseRotEuler = isRight ? Vector3.Scale(loosenedHandRotation, loosenedHandRotationMirror) : loosenedHandRotation;
+            Vector3 gripRotEuler = isRight ? rightHandGripRotation : leftHandGripRotation;
+            Quaternion loosenedRot = Quaternion.Slerp(Quaternion.identity, Quaternion.Euler(looseRotEuler), _readyT);
+            Quaternion rotOff = Quaternion.Euler(gripRotEuler) * loosenedRot;
+
+            if (loosenedHandAnchorHead && headBone != null)
+            {
+                // Position relative to the HEAD bone (loosenedHandOffset = head-local point), eased from the
+                // on-hold pose. WriteEffector does holdPos + finalRot·posOffset, so feed the offset that lands
+                // the hand on the head target — keeps HandAverage/cleanup on the same channel. (handHoldOffset
+                // un-applied here; the loosened hand is leaving the hold anyway.)
+                Quaternion finalRot = _rig.GetCurrentRotation(released) * rotOff;
+                Vector3 holdPos = _rig.GetCurrentPosition(released);
+                Vector3 onHold = holdPos + finalRot * handHoldOffset;
+                Vector3 headTarget = headBone.TransformPoint(looseOff);
+                Vector3 worldTarget = Vector3.Lerp(onHold, headTarget, _readyT);
+                _rig.SetPositionOffset(released, Quaternion.Inverse(finalRot) * (worldTarget - holdPos));
+            }
+            else
+            {
+                // Hold-relative (default): offset in the grip frame, decoupled from the wrist twist via
+                // Inverse(loosened)·offset so re-angling the wrist twists in place without sliding the hand.
+                Vector3 baseOffset = handHoldOffset + looseOff * _readyT;
+                _rig.SetPositionOffset(released, Quaternion.Inverse(loosenedRot) * baseOffset);
+            }
+            _rig.SetRotationOffset(released, rotOff);
+
+            DriveBracedReadyCamera();   // root yaw + shoulder + side, lerped by _readyT toward the current side
+            UpdateFeet(dt);             // feet stay planted; legs idle via the legs-only-when-moving logic
+
+            if (_readyReturning && _readyT <= 0f)
+            {
+                if (_pendingSwap)
+                {
+                    _readySign = -_readySign;    // squared → flip to the other side, then ease back up
+                    _pendingSwap = false;
+                    _readyReturning = false;
+                }
+                else
+                {
+                    RestoreBracedReadyCamera();  // square + unfreeze the rig (resyncs from the now-squared root)
+                    _mode = ClimbMode.Climbing;
+                    _readyReturning = false;
+                    _pendulumFrozen = false;
+                }
+            }
+        }
+
+        /// <summary>Freeze PlayerCameraRig and snapshot the camera framing (root local rotation + shoulder/side)
+        /// so the peek can drive it and restore it cleanly on exit.</summary>
+        private void SnapshotBracedReadyCamera()
+        {
+            if (peekVcamFollow != null)
+            {
+                _camSnapShoulder = peekVcamFollow.ShoulderOffset;
+                _camSnapSide = peekVcamFollow.CameraSide;
+            }
+            if (peekCameraRoot != null) _camSnapRootLocal = peekCameraRoot.localRotation;
+            _cameraOverridden = true;
+            _cameraRig?.SetFrozen(true);
+        }
+
+        /// <summary>Drives the peek camera toward the current side, scaled by _readyT (so it swings through the
+        /// snapshot framing during a side-swap, in lockstep with the body turn). +sign = LEFT, −sign = right.</summary>
+        private void DriveBracedReadyCamera()
+        {
+            if (!_cameraOverridden) return;
+            float s = _readySign >= 0 ? 1f : -1f;
+            float k = _readyT;
+            if (peekCameraRoot != null)
+            {
+                // The _readyT==0 waypoint is the ANCHOR mid-point during a swap (camera swings sideA→anchor→sideB),
+                // else the snapshot (entry/return). Same working local Slerp either way.
+                Quaternion waypoint = (_camMidSwap && _swapAnchor != null) ? AnchorMidLocal() : _camSnapRootLocal;
+                peekCameraRoot.localRotation = Quaternion.Slerp(waypoint, Quaternion.Euler(0f, peekRootYaw * s, 0f), k);
+            }
+            if (peekVcamFollow != null)
+            {
+                Vector3 sh = peekVcamFollow.ShoulderOffset;
+                sh.x = Mathf.Lerp(_camSnapShoulder.x, peekShoulderX, k);
+                peekVcamFollow.ShoulderOffset = sh;
+                peekVcamFollow.CameraSide = Mathf.Lerp(_camSnapSide, -peekCameraSide * s, k);
+            }
+        }
+
+        /// <summary>Restores the snapshot camera framing and hands free-look back to PlayerCameraRig. Call only
+        /// when the camera is back near squared (so SetFrozen(false)'s resync doesn't snap).</summary>
+        private void RestoreBracedReadyCamera()
+        {
+            if (!_cameraOverridden) return;
+            if (peekCameraRoot != null) peekCameraRoot.localRotation = _camSnapRootLocal;
+            if (peekVcamFollow != null)
+            {
+                peekVcamFollow.ShoulderOffset = _camSnapShoulder;
+                peekVcamFollow.CameraSide = _camSnapSide;
+            }
+            _cameraOverridden = false;
+            _cameraRig?.SetFrozen(false);
+            DisableSwapAnchor();
+        }
+
+        /// <summary>Lazily creates (once) + positions the swap mid-point anchor at the player root + offset, and
+        /// enables it. Called on peek entry BEFORE the camera starts moving, so a stale position is never swung
+        /// through.</summary>
+        private void EnableSwapAnchor()
+        {
+            if (_swapAnchor == null)
+            {
+                _swapAnchor = new GameObject("ClimbPeekSwapAnchor").transform;
+                _swapAnchor.SetParent(transform, false);
+            }
+            _swapAnchor.localPosition = peekSwapAnchorOffset;
+            _swapAnchor.localRotation = Quaternion.identity;
+            _swapAnchor.gameObject.SetActive(true);
+        }
+
+        private void DisableSwapAnchor()
+        {
+            if (_swapAnchor != null) _swapAnchor.gameObject.SetActive(false);
+        }
+
+        /// <summary>The swap mid-point as a camera-root LOCAL rotation: the root faces AWAY from the anchor so the
+        /// third-person camera sits AT the anchor (behind the player → the camera orbits around the back). Yaw-only.</summary>
+        private Quaternion AnchorMidLocal()
+        {
+            Vector3 dir = Vector3.ProjectOnPlane(peekCameraRoot.position - _swapAnchor.position, Vector3.up);
+            if (dir.sqrMagnitude < 1e-5f) dir = transform.forward;
+            Quaternion midWorld = Quaternion.LookRotation(dir.normalized, Vector3.up);
+            Transform p = peekCameraRoot.parent;
+            return (p != null ? Quaternion.Inverse(p.rotation) : Quaternion.identity) * midWorld;
+        }
+
+        /// <summary>Post-solve head turn: the body ROOT already yawed by the torso angle (grip-preserving, in
+        /// UpdateBodyPose); add the EXTRA head yaw here so the gaze lands ~away from the wall. The head isn't
+        /// IK-driven, so rotating it post-solve drags no hand. Scaled by the eased <see cref="_readyT"/>.</summary>
+        private void ApplyBracedReadyTurn()
+        {
+            if (_mode != ClimbMode.BracedReady || _rig == null || headBone == null) return;
+            float w = _readyT * _rig.MasterWeight;
+            if (w <= 0.001f) return;
+            float sign = bracedReadyTurnInvert ? -_readySign : _readySign;
+            headBone.rotation = Quaternion.AngleAxis(bracedReadyHeadAngle * w * sign, transform.up) * headBone.rotation;
+        }
+
+        /// <summary>
+        /// Reach-bottom: if solid ground is within <see cref="reachBottomDistance"/> below the body, step off
+        /// (release with zero vertical velocity). Only once the grab has fully faded in, so it never fires
+        /// during the grab transition. Returns true if it released this frame.
+        /// </summary>
+        private bool TryReachBottom()
+        {
+            if (!enableReachBottom || _mantling || _gettingUp) return false;
+            if (_rig.MasterWeight < 0.99f) return false;   // not while the grab is still fading in
+            Vector3 origin = transform.position + Vector3.up * 0.1f;
+            if (!Physics.Raycast(origin, Vector3.down, reachBottomDistance + 0.1f,
+                                 mantleSurfaceMask, QueryTriggerInteraction.Ignore))
+                return false;
+            BeginRelease();   // zeroes vertical velocity for a clean step-off
+            Debug.Log("[ClimbController] Reach-bottom — stepping off near the ground.");
+            return true;
         }
 
         /// <summary>

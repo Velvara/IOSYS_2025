@@ -87,6 +87,7 @@ namespace Game.Climbing
         public bool IsValid => _ik != null && _ik.solver != null;
 
         public Vector3 GetCurrentPosition(ClimbEffector e) => _currentPos[(int)e];
+        public Quaternion GetCurrentRotation(ClimbEffector e) => _currentRot[(int)e];
         public bool IsMoving(ClimbEffector e) => _moving[(int)e];
 
         /// <summary>True while any effector is mid-move (drives stamina "moving between holds").</summary>
