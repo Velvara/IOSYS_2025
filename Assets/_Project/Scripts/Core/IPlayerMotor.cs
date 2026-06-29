@@ -31,5 +31,11 @@ namespace Game.PlayerV2
         /// normal air control). Zero unless set, so ordinary locomotion is unaffected.
         /// </summary>
         void AddLaunchVelocity(Vector3 horizontalWorld, float decayRate);
+
+        /// <summary>
+        /// Ignore air-control input for the next <paramref name="seconds"/> so a launch arc (climb jump-off)
+        /// flies clean — only the launch velocity + gravity, no input steering. Grounded movement unaffected.
+        /// </summary>
+        void SuppressAirControl(float seconds);
     }
 }

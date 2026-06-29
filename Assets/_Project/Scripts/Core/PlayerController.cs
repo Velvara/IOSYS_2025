@@ -106,6 +106,7 @@ namespace Game.PlayerV2
         public void SetVerticalVelocity(float v) => _motor?.SetVerticalVelocity(v);
         public void AddLaunchVelocity(Vector3 horizontalWorld, float decayRate) =>
             _motor?.AddLaunchVelocity(horizontalWorld, decayRate);
+        public void SuppressAirControl(float seconds) => _motor?.SuppressAirControl(seconds);
 
         // ── IControlLock ─────────────────────────────────────────────────────
         // External systems (hookshot drag, cutscenes) call these to take/return control.

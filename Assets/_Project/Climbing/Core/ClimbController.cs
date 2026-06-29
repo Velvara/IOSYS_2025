@@ -187,6 +187,24 @@ namespace Game.Climbing
         [Tooltip("Local offset (from the player root) for the runtime swap MID-POINT anchor — the camera swings THROUGH this point during a side-swap. Default (0,0,-1) = behind the player so the camera orbits around the back. Created/positioned on peek entry, disabled on exit.")]
         [SerializeField] private Vector3 peekSwapAnchorOffset = new Vector3(0f, 0f, -1f);
 
+        [Header("Climb Jump-Off (Jump from BracedReady)")]
+        [Tooltip("Outward (away-from-wall) launch speed of the jump-off (decaying horizontal, blends to normal air control).")]
+        [SerializeField] private float climbJumpOutward = 4f;
+        [Tooltip("Upward launch speed of the jump-off.")]
+        [SerializeField] private float climbJumpUp = 5f;
+        [Tooltip("How fast the outward launch velocity decays back to normal air control (per second).")]
+        [SerializeField] private float climbJumpDecay = 3f;
+        [Tooltip("Seconds the FBBIK fades out after the jump leaves the wall (hands lerp off the holds onto the ClimbJump clip).")]
+        [SerializeField] private float climbJumpIkFade = 0.15f;
+        [Tooltip("Hard cap: launch even if the ClimbJump 'leave wall' animation event never fires (guards a missing event).")]
+        [SerializeField] private float climbJumpSafetyTimeout = 1f;
+        [Tooltip("After a jump-off, suppress re-grab for this long (longer than regrabCooldown) so you can't re-attach until you're already facing away from the wall mid-jump.")]
+        [SerializeField] private float jumpRegrabCooldown = 0.6f;
+        [Tooltip("Buffer window: a Use press within this time before touching a climbable still grabs (lets you catch a wall mid-jump).")]
+        [SerializeField] private float useBufferTime = 0.2f;
+        [Tooltip("Seconds after a jump-off during which air-control input is ignored, so the launch arc flies clean (no steering/bending). Set ~ the arc length you want uncontrolled.")]
+        [SerializeField] private float climbJumpNoAirControlTime = 0.8f;
+
         [Header("Feet / Bracing (own tuning — legs reach further than arms)")]
         [Tooltip("Hip drop below the hand-average (the foot anchor reference). Pendulum replaces this later.")]
         [SerializeField] private float hipDropFromHands = 0.9f;
@@ -418,6 +436,15 @@ namespace Game.Climbing
         private bool _cameraOverridden;     // BracedReady owns the camera (rig frozen, framing driven directly)
         private bool _camMidSwap;           // a side-swap is routing the camera through the mid-point anchor
         private Transform _swapAnchor;      // runtime mid-point the camera swings through during a swap
+
+        // -- Climb jump-off (from BracedReady) --
+        private bool _climbJumping;         // wind-up: squaring up + ClimbJump clip, IK still pinned, awaiting leave-wall
+        private bool _jumpFadingOut;        // post-launch: airborne, fading the IK out (hands lerp off the holds)
+        private float _jumpTimer;
+        private Vector3 _jumpOutwardDir = Vector3.forward;
+        private Quaternion _jumpCamWorld = Quaternion.identity;   // peek camera world rotation held through the jump
+        private float _useBufferTimer;      // buffered Use press (airborne wall-catch)
+        private static readonly int _hClimbJump = Animator.StringToHash("ClimbJump");
         private Vector3 _camSnapShoulder;
         private float _camSnapSide;
         private Quaternion _camSnapRootLocal = Quaternion.identity;
@@ -512,6 +539,8 @@ namespace Game.Climbing
                 if (use != null) use.performed += OnUseInput;
                 var cancel = _playerInput.actions["Cancel"];
                 if (cancel != null) cancel.performed += OnCancelInput;
+                var jump = _playerInput.actions["Jump"];
+                if (jump != null) jump.performed += OnJumpInput;
             }
         }
 
@@ -532,6 +561,8 @@ namespace Game.Climbing
                 if (use != null) use.performed -= OnUseInput;
                 var cancel = _playerInput.actions["Cancel"];
                 if (cancel != null) cancel.performed -= OnCancelInput;
+                var jump = _playerInput.actions["Jump"];
+                if (jump != null) jump.performed -= OnJumpInput;
             }
         }
 
@@ -540,34 +571,48 @@ namespace Game.Climbing
         {
             if (_isClimbing)
             {
-                if (_releasing || _mantling || _gettingUp) return;
+                if (_releasing || _mantling || _gettingUp || _climbJumping || _jumpFadingOut) return;
                 if (_mode == ClimbMode.BracedReady)
                     _readyReturning = !_readyReturning;     // toggle: peek ↔ return-to-climbing (responsive mid-ease)
                 else if (!_freeHang)
                     EnterBracedReady();                     // braced → peek
                 return;
             }
-            if (!_hasCandidate || _regrabCooldownTimer > 0f) return;
             if (_input != null && _input.AimHeld) return;   // Use fires a tool while aiming — don't also grab
-            Grab();
+            _useBufferTimer = useBufferTime;                // buffered: Update grabs when a candidate is in reach (incl. mid-jump catch)
         }
 
         /// <summary>Cancel: exit the climb (drop) from any climbing state — braced, BracedReady, or free-hang.</summary>
         private void OnCancelInput(InputAction.CallbackContext ctx)
         {
-            if (!_isClimbing || _releasing || _mantling || _gettingUp) return;
+            if (!_isClimbing || _releasing || _mantling || _gettingUp || _climbJumping || _jumpFadingOut) return;
             BeginRelease();
+        }
+
+        /// <summary>Jump: from BracedReady, launch off the wall (wind-up → ClimbJump clip → leave-wall event → launch).</summary>
+        private void OnJumpInput(InputAction.CallbackContext ctx)
+        {
+            if (_isClimbing && _mode == ClimbMode.BracedReady && !_climbJumping && !_jumpFadingOut && !_releasing)
+                BeginClimbJump();
         }
 
         private void Update()
         {
             if (_regrabCooldownTimer > 0f) _regrabCooldownTimer -= Time.deltaTime;
+            if (_useBufferTimer > 0f) _useBufferTimer -= Time.deltaTime;
 
-            // Look for a grab candidate while free (suppressed briefly after a mantle/drop so we don't re-grab).
+            // Look for a grab candidate while free (suppressed briefly after a mantle/drop/jump so we don't re-grab).
             if (!_isClimbing && _regrabCooldownTimer <= 0f)
                 _hasCandidate = TryFindCandidate(out _candidatePos, out _candidateRot, out _candidateSurface);
             else
                 _hasCandidate = false;
+
+            // Buffered Use → grab as soon as a candidate is in reach (real entry, or catching a wall mid-jump).
+            if (!_isClimbing && _hasCandidate && _useBufferTimer > 0f && (_input == null || !_input.AimHeld))
+            {
+                Grab();
+                _useBufferTimer = 0f;
+            }
 
             if (enableDebugToggle && Keyboard.current != null &&
                 Keyboard.current[debugToggleKey].wasPressedThisFrame)
@@ -697,6 +742,8 @@ namespace Game.Climbing
             _pendulumFrozen = false;
             _cameraOverridden = false;
             _camMidSwap = false;
+            _climbJumping = false;
+            _jumpFadingOut = false;
             ApplyGripOffset();
 
             _freeHangFacing = intoFlat.sqrMagnitude > 1e-4f ? intoFlat.normalized : transform.forward;
@@ -746,6 +793,8 @@ namespace Game.Climbing
             _pendingSwap = false;
             _pendulumFrozen = false;
             _camMidSwap = false;
+            _climbJumping = false;
+            _jumpFadingOut = false;
             _rig.SetMasterWeight(0f);
             SetArmBendDirections(0f);            // hand the arm bend back to FBBIK's default
             SetLegBendDirections(0f);            // hand the knee bend back too
@@ -767,6 +816,9 @@ namespace Game.Climbing
 
             // Post-mantle get-up: cross-fade the climb pose out to the standing base idle (control still locked).
             if (_gettingUp) { TickGetup(dt); return; }
+
+            // Post-jump: airborne, the motor drives the body; just fade the IK out then finalize.
+            if (_jumpFadingOut) { TickJumpFadeOut(dt); return; }
 
             // Fade FBBIK weight toward target (in on grab, out on release).
             float dur = _masterWeightTarget > _rig.MasterWeight ? ikFadeInDuration : ikFadeOutDuration;
@@ -796,7 +848,9 @@ namespace Game.Climbing
             SetArmBendDirections(elbowBendWeight);
             if (!_releasing)
             {
-                if (_mode == ClimbMode.BracedReady)
+                if (_climbJumping)
+                    TickClimbJump(dt);     // jump wind-up: square up + ClimbJump clip, hands stay pinned
+                else if (_mode == ClimbMode.BracedReady)
                     TickBracedReady(dt);   // peek: movement locked, ease the turn, fade the released hand
                 else
                 {
@@ -810,6 +864,7 @@ namespace Game.Climbing
             _rig.Tick(dt);
             StepPendulum(dt);
             UpdateBodyPose();
+            if (_climbJumping) HoldJumpCamera();   // hold the camera at the peek (after the body pose squares up)
 
             // Trigger the mantle only AFTER UpdateBodyPose has placed the body for the current hands —
             // capturing _mantleStart before this froze a stale, pre-hand-step position, so the body snapped
@@ -1299,6 +1354,84 @@ namespace Game.Climbing
             _cameraOverridden = false;
             _cameraRig?.SetFrozen(false);
             DisableSwapAnchor();
+        }
+
+        /// <summary>Jump from BracedReady: wind-up (square up + ClimbJump clip, hands still IK-pinned) until the
+        /// clip's "leave wall" animation event (OnClimbJumpLeaveWall) — or the safety timeout — fires the launch.</summary>
+        private void BeginClimbJump()
+        {
+            _climbJumping = true;
+            _jumpTimer = 0f;
+            _pendingSwap = false;
+            _camMidSwap = false;
+            _readyReturning = false;
+            // Launch direction = flattened away-from-wall (side-independent, same regardless of peek side).
+            Vector3 outward = Vector3.ProjectOnPlane(AvgOutward(), Vector3.up);
+            _jumpOutwardDir = outward.sqrMagnitude > 1e-4f
+                ? outward.normalized
+                : Vector3.ProjectOnPlane(-transform.forward, Vector3.up).normalized;
+            if (peekCameraRoot != null) _jumpCamWorld = peekCameraRoot.rotation;   // hold this peek framing through the jump
+            if (_animator != null && _climbLayerIndex >= 0)
+            {
+                if (_animator.HasState(_climbLayerIndex, _hClimbJump))
+                    _animator.CrossFade(_hClimbJump, 0.1f, _climbLayerIndex, 0f);
+                else
+                    Debug.LogWarning("[ClimbController] No 'ClimbJump' state on ClimbingLayer — jump uses the timed fallback only.");
+            }
+            Debug.Log("[ClimbController] Climb jump-off — wind-up.");
+        }
+
+        /// <summary>Jump wind-up: square the body + camera back up (peek → neutral) while the ClimbJump clip plays
+        /// and the hands stay pinned. The launch fires from OnClimbJumpLeaveWall (or the safety timeout).</summary>
+        private void TickClimbJump(float dt)
+        {
+            _jumpTimer += dt;
+            _readyT = Mathf.MoveTowards(_readyT, 0f, dt / Mathf.Max(0.0001f, bracedReadyTurnDuration));  // square the body up
+            // The camera is HELD at its captured peek world rotation (applied after UpdateBodyPose so the
+            // squaring body-root can't drag it) — see HoldJumpCamera().
+            UpdateFeet(dt);
+            if (_jumpTimer >= climbJumpSafetyTimeout) FinishClimbJump();
+        }
+
+        /// <summary>Holds the camera target at the peek world rotation captured at jump start (after the body pose,
+        /// so the squaring body / motor can't drag the camera child). Restored at FinishRelease.</summary>
+        private void HoldJumpCamera()
+        {
+            if (_cameraOverridden && peekCameraRoot != null) peekCameraRoot.rotation = _jumpCamWorld;
+        }
+
+        /// <summary>Animation event on the ClimbJump clip — the frame the character leaves the wall.</summary>
+        public void OnClimbJumpLeaveWall()
+        {
+            if (_climbJumping) FinishClimbJump();
+        }
+
+        /// <summary>Leaves the wall: apply the launch, hand control to the motor (airborne), restore the camera,
+        /// and fade the IK out (hands lerp off the holds onto the ClimbJump clip). Re-grab stays suppressed by the
+        /// longer jumpRegrabCooldown until the character is facing away from the wall.</summary>
+        private void FinishClimbJump()
+        {
+            _climbJumping = false;
+            _motor?.AddLaunchVelocity(_jumpOutwardDir * climbJumpOutward, climbJumpDecay);
+            _motor?.SetVerticalVelocity(climbJumpUp);
+            _motor?.SuppressAirControl(climbJumpNoAirControlTime);   // clean arc — no input steering/bending
+            _controlLock?.ReleaseExternalControl();   // motor drives the body from here (airborne)
+            // Camera stays held at the peek (rig still frozen) through the IK-fade; FinishRelease restores it.
+            _jumpFadingOut = true;                     // TickClimb fades the IK out, then finalizes
+            _regrabCooldownTimer = jumpRegrabCooldown;
+            Debug.Log("[ClimbController] Climb jump-off — launched.");
+        }
+
+        /// <summary>Post-launch: airborne, motor-driven body; fade the FBBIK out over climbJumpIkFade so the hands
+        /// lerp off the holds onto the ClimbJump clip, then finalize. The body is NOT climb-driven here.</summary>
+        private void TickJumpFadeOut(float dt)
+        {
+            _rig.SetMasterWeight(Mathf.MoveTowards(_rig.MasterWeight, 0f, climbJumpIkFade > 0f ? dt / climbJumpIkFade : 1f));
+            if (_animator != null && _climbLayerIndex >= 0)
+                _animator.SetLayerWeight(_climbLayerIndex, _rig.MasterWeight);
+            _rig.Tick(dt);
+            HoldJumpCamera();   // keep the camera held (motor drives the body now) until FinishRelease restores it
+            if (_rig.MasterWeight <= 0.001f) FinishRelease();
         }
 
         /// <summary>Lazily creates (once) + positions the swap mid-point anchor at the player root + offset, and

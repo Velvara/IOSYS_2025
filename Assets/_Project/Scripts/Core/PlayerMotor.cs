@@ -68,6 +68,7 @@ namespace Game.PlayerV2
         // -- Decaying horizontal launch (e.g. climb jump-off), additive on top of input movement --
         private Vector3 _launchVelocity;
         private float _launchDecayRate;
+        private float _airControlSuppressTimer;   // > 0 = ignore air-control input (clean launch arc)
 
         // -- Animator hash IDs --
         private readonly int _hSpeed, _hMotionSpeed, _hGrounded, _hJump, _hFreeFall, _hSprint, _hFatigued, _hStealth;
@@ -158,6 +159,9 @@ namespace Game.PlayerV2
             else if (_hasAnimator)
                 _animator.SetBool(_hFreeFall, true);
 
+            // Suppress air-control input during a climb jump-off so the launch arc isn't steered/bent.
+            if (_airControlSuppressTimer > 0f) { _airControlSuppressTimer -= dt; moveInput = Vector2.zero; }
+
             MoveHorizontal(moveInput, targetSpeed, ignoreStickScaling, dt);
             ApplyGravity(dt);
             ApplyMove(dt);
@@ -207,6 +211,10 @@ namespace Game.PlayerV2
             _launchVelocity = horizontalWorld;
             _launchDecayRate = Mathf.Max(0.01f, decayRate);
         }
+
+        /// <summary>Ignore air-control input for the next <paramref name="seconds"/> (the climb jump-off arc flies
+        /// clean — only launch + gravity, no input steering). Grounded movement is unaffected.</summary>
+        public void SuppressAirControl(float seconds) => _airControlSuppressTimer = Mathf.Max(_airControlSuppressTimer, seconds);
 
         private void MoveHorizontal(Vector2 moveInput, float targetSpeed, bool ignoreStickScaling, float dt)
         {
