@@ -37,5 +37,13 @@ namespace Game.PlayerV2
         /// flies clean — only the launch velocity + gravity, no input steering. Grounded movement unaffected.
         /// </summary>
         void SuppressAirControl(float seconds);
+
+        /// <summary>
+        /// Predicts a decaying-launch + gravity arc (no air control), filling <paramref name="points"/> from
+        /// <paramref name="startPos"/> using the motor's own integration + gravity — so a trajectory preview
+        /// matches the real jump-off path.
+        /// </summary>
+        void PredictLaunchArc(Vector3 startPos, Vector3 horizontalVel, float horizontalDecay, float upVel,
+                              float stepDt, Vector3[] points);
     }
 }

@@ -216,6 +216,28 @@ namespace Game.PlayerV2
         /// clean — only launch + gravity, no input steering). Grounded movement is unaffected.</summary>
         public void SuppressAirControl(float seconds) => _airControlSuppressTimer = Mathf.Max(_airControlSuppressTimer, seconds);
 
+        /// <summary>Predicts the path of a decaying-launch + gravity arc (no air control), filling <paramref
+        /// name="points"/> from <paramref name="startPos"/>. Uses the SAME per-step integration as TickAir/ApplyMove
+        /// (gravity → move → launch decay) with the motor's own gravity, so a trajectory line matches the real jump.</summary>
+        public void PredictLaunchArc(Vector3 startPos, Vector3 horizontalVel, float horizontalDecay, float upVel,
+                                     float stepDt, Vector3[] points)
+        {
+            if (points == null || points.Length == 0) return;
+            float g = _cfg != null ? _cfg.Gravity : -15f;
+            Vector3 pos = startPos;
+            Vector3 h = new Vector3(horizontalVel.x, 0f, horizontalVel.z);
+            float vv = upVel;
+            float decay = Mathf.Max(0.01f, horizontalDecay);
+            points[0] = pos;
+            for (int i = 1; i < points.Length; i++)
+            {
+                vv += g * stepDt;
+                pos += (h + new Vector3(0f, vv, 0f)) * stepDt;
+                h = Vector3.MoveTowards(h, Vector3.zero, decay * stepDt);
+                points[i] = pos;
+            }
+        }
+
         private void MoveHorizontal(Vector2 moveInput, float targetSpeed, bool ignoreStickScaling, float dt)
         {
             if (moveInput == Vector2.zero) targetSpeed = 0f;

@@ -107,6 +107,9 @@ namespace Game.PlayerV2
         public void AddLaunchVelocity(Vector3 horizontalWorld, float decayRate) =>
             _motor?.AddLaunchVelocity(horizontalWorld, decayRate);
         public void SuppressAirControl(float seconds) => _motor?.SuppressAirControl(seconds);
+        public void PredictLaunchArc(Vector3 startPos, Vector3 horizontalVel, float horizontalDecay, float upVel,
+                                     float stepDt, Vector3[] points) =>
+            _motor?.PredictLaunchArc(startPos, horizontalVel, horizontalDecay, upVel, stepDt, points);
 
         // ── IControlLock ─────────────────────────────────────────────────────
         // External systems (hookshot drag, cutscenes) call these to take/return control.

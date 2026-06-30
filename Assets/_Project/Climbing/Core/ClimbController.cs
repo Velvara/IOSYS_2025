@@ -198,12 +198,28 @@ namespace Game.Climbing
         [SerializeField] private float climbJumpIkFade = 0.15f;
         [Tooltip("Hard cap: launch even if the ClimbJump 'leave wall' animation event never fires (guards a missing event).")]
         [SerializeField] private float climbJumpSafetyTimeout = 1f;
-        [Tooltip("After a jump-off, suppress re-grab for this long (longer than regrabCooldown) so you can't re-attach until you're already facing away from the wall mid-jump.")]
-        [SerializeField] private float jumpRegrabCooldown = 0.6f;
+        [Tooltip("After the jump leaves the wall, seconds to rotate the character 180° to face the jump direction. Reattaching to walls is blocked until this turn completes.")]
+        [SerializeField] private float jumpTurnDuration = 0.5f;
+        [Tooltip("On reattaching to a wall mid-jump, seconds to ease the camera framing (shoulder offset / side) from the held jump values back to normal climb settings. Rotation isn't snapped — free-look just resumes from where the camera is.")]
+        [SerializeField] private float camReattachRestoreTime = 0.3f;
+
+        [Header("Jump Trajectory Line (BracedReady preview)")]
+        [Tooltip("LineRenderer drawing the predicted jump arc while in BracedReady (set Use World Space). Optional — leave null to disable.")]
+        [SerializeField] private LineRenderer peekTrajectoryLine;
+        [Tooltip("Show the predicted jump arc during BracedReady.")]
+        [SerializeField] private bool showTrajectory = true;
+        [Tooltip("Number of sample points along the predicted arc (more = longer preview).")]
+        [SerializeField] private int trajectoryPoints = 40;
+        [Tooltip("Seconds between arc samples — total preview time = points × this.")]
+        [SerializeField] private float trajectoryTimeStep = 0.05f;
+        [Tooltip("Layers the arc preview stops at (climbables + ground/environment).")]
+        [SerializeField] private LayerMask trajectoryCollisionMask = ~0;
         [Tooltip("Buffer window: a Use press within this time before touching a climbable still grabs (lets you catch a wall mid-jump).")]
         [SerializeField] private float useBufferTime = 0.2f;
         [Tooltip("Seconds after a jump-off during which air-control input is ignored, so the launch arc flies clean (no steering/bending). Set ~ the arc length you want uncontrolled.")]
         [SerializeField] private float climbJumpNoAirControlTime = 0.8f;
+        [Tooltip("While airborne after a jump-off, the ClimbJump pose + camera are held until the character lands, reattaches, or falls THIS many metres below the launch height (→ ragdoll later; for now just hands off to locomotion).")]
+        [SerializeField] private float jumpRagdollFallHeight = 5f;
 
         [Header("Feet / Bracing (own tuning — legs reach further than arms)")]
         [Tooltip("Hip drop below the hand-average (the foot anchor reference). Pendulum replaces this later.")]
@@ -439,9 +455,19 @@ namespace Game.Climbing
 
         // -- Climb jump-off (from BracedReady) --
         private bool _climbJumping;         // wind-up: squaring up + ClimbJump clip, IK still pinned, awaiting leave-wall
-        private bool _jumpFadingOut;        // post-launch: airborne, fading the IK out (hands lerp off the holds)
+        private bool _jumpAirborne;         // post-launch: airborne, holding ClimbJump's last frame + camera, fading IK out
+        private float _jumpStartY;          // body Y at launch (for the fall-distance → ragdoll check)
+        private Quaternion _jumpTurnFrom = Quaternion.identity, _jumpTurnTo = Quaternion.identity;
+        private float _jumpTurnT = 1f;      // 0→1 over jumpTurnDuration; the post-jump 180° turn to face the jump
+        private bool _jumpReattachBlocked;  // can't re-grab until the post-jump turn completes
+        private bool _camSideRestoring;     // easing shoulder/side back to normal after a mid-jump reattach
+        private float _camSideRestoreT;
+        private Vector3 _camRestoreFromShoulder;
+        private float _camRestoreFromSide;
         private float _jumpTimer;
         private Vector3 _jumpOutwardDir = Vector3.forward;
+        private Vector3 _bracedReadyJumpDir = Vector3.forward;   // wall-perpendicular launch dir, cast at peek ENTER (pre-turn); reused by the jump + trajectory
+        private Vector3[] _trajPoints;      // reused buffer for the predicted-arc preview
         private Quaternion _jumpCamWorld = Quaternion.identity;   // peek camera world rotation held through the jump
         private float _useBufferTimer;      // buffered Use press (airborne wall-catch)
         private static readonly int _hClimbJump = Animator.StringToHash("ClimbJump");
@@ -571,7 +597,7 @@ namespace Game.Climbing
         {
             if (_isClimbing)
             {
-                if (_releasing || _mantling || _gettingUp || _climbJumping || _jumpFadingOut) return;
+                if (_releasing || _mantling || _gettingUp || _climbJumping) return;
                 if (_mode == ClimbMode.BracedReady)
                     _readyReturning = !_readyReturning;     // toggle: peek ↔ return-to-climbing (responsive mid-ease)
                 else if (!_freeHang)
@@ -585,14 +611,14 @@ namespace Game.Climbing
         /// <summary>Cancel: exit the climb (drop) from any climbing state — braced, BracedReady, or free-hang.</summary>
         private void OnCancelInput(InputAction.CallbackContext ctx)
         {
-            if (!_isClimbing || _releasing || _mantling || _gettingUp || _climbJumping || _jumpFadingOut) return;
+            if (!_isClimbing || _releasing || _mantling || _gettingUp || _climbJumping) return;
             BeginRelease();
         }
 
         /// <summary>Jump: from BracedReady, launch off the wall (wind-up → ClimbJump clip → leave-wall event → launch).</summary>
         private void OnJumpInput(InputAction.CallbackContext ctx)
         {
-            if (_isClimbing && _mode == ClimbMode.BracedReady && !_climbJumping && !_jumpFadingOut && !_releasing)
+            if (_isClimbing && _mode == ClimbMode.BracedReady && !_climbJumping && !_releasing)
                 BeginClimbJump();
         }
 
@@ -601,8 +627,11 @@ namespace Game.Climbing
             if (_regrabCooldownTimer > 0f) _regrabCooldownTimer -= Time.deltaTime;
             if (_useBufferTimer > 0f) _useBufferTimer -= Time.deltaTime;
 
-            // Look for a grab candidate while free (suppressed briefly after a mantle/drop/jump so we don't re-grab).
-            if (!_isClimbing && _regrabCooldownTimer <= 0f)
+            // Post-jump airborne hold: motor flies the body; hold the ClimbJump pose + camera until land/catch/fall.
+            if (_jumpAirborne) TickJumpAirborne(Time.deltaTime);
+
+            // Look for a grab candidate while free (suppressed after a mantle/drop, and during the post-jump turn).
+            if (!_isClimbing && _regrabCooldownTimer <= 0f && !_jumpReattachBlocked)
                 _hasCandidate = TryFindCandidate(out _candidatePos, out _candidateRot, out _candidateSurface);
             else
                 _hasCandidate = false;
@@ -622,6 +651,12 @@ namespace Game.Climbing
             }
 
             if (_isClimbing) TickClimb(Time.deltaTime);
+
+            // Jump-arc preview — only while peeking (BracedReady, not mid-jump).
+            if (showTrajectory && peekTrajectoryLine != null && _isClimbing && _mode == ClimbMode.BracedReady && !_climbJumping)
+                UpdateTrajectory();
+            else
+                HideTrajectory();
         }
 
         /// <summary>
@@ -688,6 +723,9 @@ namespace Game.Climbing
         {
             if (_isClimbing || _controlLock == null || _rig == null || _candidateSurface == null) return;
 
+            // Reattaching mid-jump: ease the camera framing back to normal (no rotation snap) over the new climb.
+            if (_cameraOverridden) BeginReattachCameraRestore();
+
             Vector3 rightPos = _candidatePos;
             Quaternion rightRot = _candidateRot;
             Vector3 rightOut = rightRot * Vector3.forward;        // hold forward = outward grab normal
@@ -743,7 +781,9 @@ namespace Game.Climbing
             _cameraOverridden = false;
             _camMidSwap = false;
             _climbJumping = false;
-            _jumpFadingOut = false;
+            _jumpAirborne = false;
+            _jumpReattachBlocked = false;
+            _jumpTurnT = 1f;
             ApplyGripOffset();
 
             _freeHangFacing = intoFlat.sqrMagnitude > 1e-4f ? intoFlat.normalized : transform.forward;
@@ -794,7 +834,9 @@ namespace Game.Climbing
             _pendulumFrozen = false;
             _camMidSwap = false;
             _climbJumping = false;
-            _jumpFadingOut = false;
+            _jumpAirborne = false;
+            _jumpReattachBlocked = false;
+            _camSideRestoring = false;
             _rig.SetMasterWeight(0f);
             SetArmBendDirections(0f);            // hand the arm bend back to FBBIK's default
             SetLegBendDirections(0f);            // hand the knee bend back too
@@ -813,12 +855,10 @@ namespace Game.Climbing
             // Keep free-look on (ExternalControlState froze it on entry) — EXCEPT in BracedReady, where the
             // peek owns the camera (frozen + driven directly).
             if (!_cameraOverridden) _cameraRig?.SetFrozen(false);
+            if (_camSideRestoring) TickReattachCameraRestore(dt);   // ease shoulder/side back after a mid-jump reattach
 
             // Post-mantle get-up: cross-fade the climb pose out to the standing base idle (control still locked).
             if (_gettingUp) { TickGetup(dt); return; }
-
-            // Post-jump: airborne, the motor drives the body; just fade the IK out then finalize.
-            if (_jumpFadingOut) { TickJumpFadeOut(dt); return; }
 
             // Fade FBBIK weight toward target (in on grab, out on release).
             float dur = _masterWeightTarget > _rig.MasterWeight ? ikFadeInDuration : ikFadeOutDuration;
@@ -1214,6 +1254,10 @@ namespace Game.Climbing
         /// until Use (return) / Cancel (exit) / Jump (later increment).</summary>
         private void EnterBracedReady()
         {
+            // Capture the wall-perpendicular launch direction NOW, while squared (before the peek turn) — the
+            // cast is clean here, and the saved value is reused by the jump-off AND the trajectory line.
+            _bracedReadyJumpDir = ComputeWallOutward();
+
             // Side = inverse of the camera look direction (dev preference): looking toward body-right → peek
             // LEFT (release left hand); looking left or straight → peek RIGHT.
             Vector3 lookFwd = peekCameraRoot != null ? peekCameraRoot.forward
@@ -1313,6 +1357,7 @@ namespace Game.Climbing
                 _camSnapSide = peekVcamFollow.CameraSide;
             }
             if (peekCameraRoot != null) _camSnapRootLocal = peekCameraRoot.localRotation;
+            _camSideRestoring = false;   // a new peek takes over the framing
             _cameraOverridden = true;
             _cameraRig?.SetFrozen(true);
         }
@@ -1356,6 +1401,92 @@ namespace Game.Climbing
             DisableSwapAnchor();
         }
 
+        /// <summary>Mid-jump reattach: hand free-look back from the CURRENT rotation (no rotation snap) and start
+        /// easing the shoulder/side framing back to normal climb settings over camReattachRestoreTime.</summary>
+        private void BeginReattachCameraRestore()
+        {
+            if (peekVcamFollow != null)
+            {
+                _camRestoreFromShoulder = peekVcamFollow.ShoulderOffset;
+                _camRestoreFromSide = peekVcamFollow.CameraSide;
+            }
+            _camSideRestoring = true;
+            _camSideRestoreT = 0f;
+            _cameraOverridden = false;
+            DisableSwapAnchor();
+            _cameraRig?.SetFrozen(false);   // resyncs from the current held rotation → free-look continues, no snap
+        }
+
+        /// <summary>Per-frame ease of the shoulder/side framing back to the snapshot after a reattach (independent
+        /// of the rig freeze; the rotation is already free-look).</summary>
+        private void TickReattachCameraRestore(float dt)
+        {
+            if (!_camSideRestoring) return;
+            _camSideRestoreT = Mathf.Min(1f, _camSideRestoreT + dt / Mathf.Max(0.0001f, camReattachRestoreTime));
+            float t = Mathf.SmoothStep(0f, 1f, _camSideRestoreT);
+            if (peekVcamFollow != null)
+            {
+                Vector3 sh = peekVcamFollow.ShoulderOffset;
+                sh.x = Mathf.Lerp(_camRestoreFromShoulder.x, _camSnapShoulder.x, t);
+                peekVcamFollow.ShoulderOffset = sh;
+                peekVcamFollow.CameraSide = Mathf.Lerp(_camRestoreFromSide, _camSnapSide, t);
+            }
+            if (_camSideRestoreT >= 1f) _camSideRestoring = false;
+        }
+
+        /// <summary>Draws the predicted jump arc (from the captured wall-perpendicular dir) into the LineRenderer,
+        /// truncated at the first collision. Uses the motor's own integration so it matches the real jump.</summary>
+        private void UpdateTrajectory()
+        {
+            if (peekTrajectoryLine == null || _motor == null) return;
+            int n = Mathf.Max(2, trajectoryPoints);
+            if (_trajPoints == null || _trajPoints.Length != n) _trajPoints = new Vector3[n];
+
+            Vector3 start = transform.position + Vector3.up * detectHeightOffset;   // ~chest launch origin
+            _motor.PredictLaunchArc(start, _bracedReadyJumpDir * climbJumpOutward, climbJumpDecay, climbJumpUp,
+                                    trajectoryTimeStep, _trajPoints);
+
+            int count = _trajPoints.Length;
+            for (int i = 1; i < _trajPoints.Length; i++)
+            {
+                if (Physics.Linecast(_trajPoints[i - 1], _trajPoints[i], out RaycastHit hit,
+                                     trajectoryCollisionMask, QueryTriggerInteraction.Ignore))
+                {
+                    _trajPoints[i] = hit.point;
+                    count = i + 1;
+                    break;
+                }
+            }
+
+            peekTrajectoryLine.positionCount = count;
+            for (int i = 0; i < count; i++) peekTrajectoryLine.SetPosition(i, _trajPoints[i]);
+            if (!peekTrajectoryLine.enabled) peekTrajectoryLine.enabled = true;
+        }
+
+        private void HideTrajectory()
+        {
+            if (peekTrajectoryLine != null && peekTrajectoryLine.enabled) peekTrajectoryLine.enabled = false;
+        }
+
+        /// <summary>The flattened, wall-PERPENDICULAR "straight back" direction: raycast the chest into the wall
+        /// (along −AvgOutward) and use the real surface normal — independent of hold-normal asymmetry. Falls back
+        /// to the hold-normal average on a miss. Captured squared at BracedReady enter so the peek turn can't
+        /// incline it; reused by the jump-off and the trajectory line.</summary>
+        private Vector3 ComputeWallOutward()
+        {
+            Vector3 outward = Vector3.ProjectOnPlane(AvgOutward(), Vector3.up);
+            outward = outward.sqrMagnitude > 1e-4f
+                ? outward.normalized
+                : Vector3.ProjectOnPlane(-transform.forward, Vector3.up).normalized;
+            Vector3 chest = transform.position + Vector3.up * detectHeightOffset;
+            if (Physics.Raycast(chest, -outward, out RaycastHit wallHit, maxReach, climbableLayers, QueryTriggerInteraction.Ignore))
+            {
+                Vector3 n = Vector3.ProjectOnPlane(wallHit.normal, Vector3.up);
+                if (n.sqrMagnitude > 1e-4f) outward = n.normalized;
+            }
+            return outward;
+        }
+
         /// <summary>Jump from BracedReady: wind-up (square up + ClimbJump clip, hands still IK-pinned) until the
         /// clip's "leave wall" animation event (OnClimbJumpLeaveWall) — or the safety timeout — fires the launch.</summary>
         private void BeginClimbJump()
@@ -1365,11 +1496,9 @@ namespace Game.Climbing
             _pendingSwap = false;
             _camMidSwap = false;
             _readyReturning = false;
-            // Launch direction = flattened away-from-wall (side-independent, same regardless of peek side).
-            Vector3 outward = Vector3.ProjectOnPlane(AvgOutward(), Vector3.up);
-            _jumpOutwardDir = outward.sqrMagnitude > 1e-4f
-                ? outward.normalized
-                : Vector3.ProjectOnPlane(-transform.forward, Vector3.up).normalized;
+            // Use the wall-perpendicular direction captured (squared, pre-turn) at BracedReady enter — so the
+            // body's peek turn never inclines the launch. Recompute only if it's somehow unset.
+            _jumpOutwardDir = _bracedReadyJumpDir.sqrMagnitude > 1e-4f ? _bracedReadyJumpDir : ComputeWallOutward();
             if (peekCameraRoot != null) _jumpCamWorld = peekCameraRoot.rotation;   // hold this peek framing through the jump
             if (_animator != null && _climbLayerIndex >= 0)
             {
@@ -1406,32 +1535,78 @@ namespace Game.Climbing
             if (_climbJumping) FinishClimbJump();
         }
 
-        /// <summary>Leaves the wall: apply the launch, hand control to the motor (airborne), restore the camera,
-        /// and fade the IK out (hands lerp off the holds onto the ClimbJump clip). Re-grab stays suppressed by the
-        /// longer jumpRegrabCooldown until the character is facing away from the wall.</summary>
+        /// <summary>Leaves the wall: apply the launch, hand control to the motor (airborne), and enter the airborne
+        /// HOLD — the ClimbJump last frame + the camera viewpoint stay held until the character lands, reattaches,
+        /// or falls past jumpRagdollFallHeight. Re-grab is blocked until the post-jump 180° turn completes.</summary>
         private void FinishClimbJump()
         {
             _climbJumping = false;
+            _jumpStartY = transform.position.y;
             _motor?.AddLaunchVelocity(_jumpOutwardDir * climbJumpOutward, climbJumpDecay);
             _motor?.SetVerticalVelocity(climbJumpUp);
             _motor?.SuppressAirControl(climbJumpNoAirControlTime);   // clean arc — no input steering/bending
-            _controlLock?.ReleaseExternalControl();   // motor drives the body from here (airborne)
-            // Camera stays held at the peek (rig still frozen) through the IK-fade; FinishRelease restores it.
-            _jumpFadingOut = true;                     // TickClimb fades the IK out, then finalizes
-            _regrabCooldownTimer = jumpRegrabCooldown;
-            Debug.Log("[ClimbController] Climb jump-off — launched.");
+            _controlLock?.ReleaseExternalControl();   // motor flies the body from here (airborne)
+            _isClimbing = false;       // motor drives + grab/catch detection re-enables; the hold runs in Update
+            _jumpAirborne = true;      // hold ClimbJump's last frame + camera until land / catch / fall
+            _stamina?.SetClimbState(false, false);
+            // Turn 180° to face the jump direction over jumpTurnDuration; reattach is blocked until it completes.
+            _jumpTurnFrom = transform.rotation;
+            _jumpTurnTo = _jumpOutwardDir.sqrMagnitude > 1e-4f
+                ? Quaternion.LookRotation(_jumpOutwardDir, Vector3.up)
+                : transform.rotation;
+            _jumpTurnT = 0f;
+            _jumpReattachBlocked = true;
+            Debug.Log("[ClimbController] Climb jump-off — launched (airborne hold).");
         }
 
-        /// <summary>Post-launch: airborne, motor-driven body; fade the FBBIK out over climbJumpIkFade so the hands
-        /// lerp off the holds onto the ClimbJump clip, then finalize. The body is NOT climb-driven here.</summary>
-        private void TickJumpFadeOut(float dt)
+        /// <summary>Airborne hold (motor flies the body): fade the FBBIK out (hands lerp off the holds onto the clip)
+        /// but keep the climb layer FULL so the ClimbJump pose (held last frame) shows — not the locomotion fall —
+        /// and hold the camera viewpoint. Ends on land, or a fall past jumpRagdollFallHeight (→ ragdoll later).
+        /// Reattaching is the separate buffered-Use grab path (Update), which resets this hold.</summary>
+        private void TickJumpAirborne(float dt)
         {
-            _rig.SetMasterWeight(Mathf.MoveTowards(_rig.MasterWeight, 0f, climbJumpIkFade > 0f ? dt / climbJumpIkFade : 1f));
-            if (_animator != null && _climbLayerIndex >= 0)
-                _animator.SetLayerWeight(_climbLayerIndex, _rig.MasterWeight);
-            _rig.Tick(dt);
-            HoldJumpCamera();   // keep the camera held (motor drives the body now) until FinishRelease restores it
-            if (_rig.MasterWeight <= 0.001f) FinishRelease();
+            // Turn the body 180° to face the jump direction (cosmetic — the launch is world-space). Air control
+            // is suppressed during this, so the motor won't fight the rotation. Unblocks reattach when done.
+            if (_jumpTurnT < 1f)
+            {
+                _jumpTurnT = Mathf.Min(1f, _jumpTurnT + dt / Mathf.Max(0.0001f, jumpTurnDuration));
+                transform.rotation = Quaternion.Slerp(_jumpTurnFrom, _jumpTurnTo, Mathf.SmoothStep(0f, 1f, _jumpTurnT));
+                if (_jumpTurnT >= 1f) _jumpReattachBlocked = false;
+            }
+
+            if (_rig != null)
+            {
+                _rig.SetMasterWeight(Mathf.MoveTowards(_rig.MasterWeight, 0f, climbJumpIkFade > 0f ? dt / climbJumpIkFade : 1f));
+                _rig.Tick(dt);
+            }
+            if (_animator != null && _climbLayerIndex >= 0) _animator.SetLayerWeight(_climbLayerIndex, 1f);
+            HoldJumpCamera();   // hold the viewpoint, following the character through the arc
+
+            CharacterController cc = _motor?.Controller;
+            // Land only once descending, so the launch frame's stale isGrounded doesn't end the hold instantly.
+            bool landed = cc != null && cc.isGrounded && _motor.VerticalVelocity <= 0f;
+            bool fellTooFar = (_jumpStartY - transform.position.y) > jumpRagdollFallHeight;
+            if (landed || fellTooFar)
+            {
+                // CLIMBING_HOOK: if (fellTooFar) start ragdoll-fall here (future increment).
+                EndJumpAirborne();
+            }
+        }
+
+        /// <summary>Ends the airborne hold — drop the ClimbJump pose + camera back to locomotion.</summary>
+        private void EndJumpAirborne()
+        {
+            _jumpAirborne = false;
+            _jumpReattachBlocked = false;
+            _rig?.SetMasterWeight(0f);
+            if (_animator != null)
+            {
+                _animator.SetBool(_hIsClimbing, false);
+                if (_climbLayerIndex >= 0) _animator.SetLayerWeight(_climbLayerIndex, 0f);
+                if (_climbLegsLayerIndex >= 0) _animator.SetLayerWeight(_climbLegsLayerIndex, 0f);
+            }
+            if (_cameraOverridden) RestoreBracedReadyCamera();
+            Debug.Log("[ClimbController] Jump airborne hold ended (land / fall).");
         }
 
         /// <summary>Lazily creates (once) + positions the swap mid-point anchor at the player root + offset, and
