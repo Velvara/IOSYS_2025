@@ -171,21 +171,23 @@ namespace Game.Climbing
         [Tooltip("Anchor the loosened-hand POSITION relative to the HEAD bone (loosenedHandOffset becomes a head-LOCAL point) instead of the hold — the hand follows the head/upper body as it turns, instead of staying at the wall hold. Rotation is unaffected.")]
         [SerializeField] private bool loosenedHandAnchorHead = false;
 
-        [Header("BracedReady Camera (peek framing)")]
-        [Tooltip("ThirdPersonFollow on the climbing vcam — the peek drives its ShoulderOffset.x + CameraSide directly. Assign in the inspector.")]
-        [SerializeField] private CinemachineThirdPersonFollow peekVcamFollow;
-        [Tooltip("PlayerCameraRoot transform (= PlayerCameraRig's follow target). Rotated to the peek yaw while the rig is frozen. Assign in the inspector.")]
-        [SerializeField] private Transform peekCameraRoot;
-        [Tooltip("Camera-root local Y yaw (deg) at full peek (+ for LEFT peek, − for right).")]
-        [SerializeField] private float peekRootYaw = 90f;
-        [Tooltip("ThirdPersonFollow ShoulderOffset.x at full peek (same for both sides).")]
-        [SerializeField] private float peekShoulderX = 1f;
-        [Tooltip("ThirdPersonFollow CameraSide at full peek (+ for LEFT, − for right). Check your Cinemachine's CameraSide range (may be 0..1) and adjust.")]
-        [SerializeField] private float peekCameraSide = 1f;
-        [Tooltip("Look-X magnitude past the OPPOSITE side that swaps the peek (latched; ignored while a turn is mid-transition).")]
+        [Header("BracedReady Camera (jump-arc orbit)")]
+        [Tooltip("Look-X magnitude past the OPPOSITE side that swaps the peek side (latched; ignored while a turn is mid-transition).")]
         [SerializeField] private float sideToggleThreshold = 0.5f;
-        [Tooltip("Local offset (from the player root) for the runtime swap MID-POINT anchor — the camera swings THROUGH this point during a side-swap. Default (0,0,-1) = behind the player so the camera orbits around the back. Created/positioned on peek entry, disabled on exit.")]
-        [SerializeField] private Vector3 peekSwapAnchorOffset = new Vector3(0f, 0f, -1f);
+        [Tooltip("Orbit the middle point at the CHARACTER's height (flat arc). Off = orbit the raw trajectory-midpoint height (the arc dips at the far/90° point).")]
+        [SerializeField] private bool orbitAtCharacterHeight = true;
+        [Tooltip("Multiplier on the arc radius. The base radius is auto-derived as half the horizontal jump distance (so it grows with jump length); this scales it. 1 = as computed, >1 pulls the camera further out.")]
+        [SerializeField] private float arcRadiusScale = 1f;
+        [Tooltip("Final arc radius clamp in metres, applied after arcRadiusScale (x = min, y = max) — keeps the camera from getting too tight on short jumps or too far on long ones.")]
+        [SerializeField] private Vector2 arcRadiusClamp = new Vector2(0.5f, 20f);
+        [Tooltip("Vertical offset (m) added to the CAMERA height on the arc (the look-at stays on the middle point, so this tilts the view down/up). 0 = level with the orbit height.")]
+        [SerializeField] private float arcHeightOffset = 0f;
+        [Tooltip("Seconds to blend the camera between free-look and the arc (peek enter / return to climb / exit).")]
+        [SerializeField] private float arcBlendDuration = 0.3f;
+        [Tooltip("Seconds to sweep the camera around the arc (0↔180, through the jump line at 90°) on a side swap.")]
+        [SerializeField] private float arcSwapDuration = 0.3f;
+        [Tooltip("Seconds to ease the camera from the held arc/jump pose back to free-look on exit, reattach, or landing.")]
+        [SerializeField] private float camReattachRestoreTime = 0.3f;
 
         [Header("Climb Jump-Off (Jump from BracedReady)")]
         [Tooltip("Outward (away-from-wall) launch speed of the jump-off (decaying horizontal, blends to normal air control).")]
@@ -200,8 +202,6 @@ namespace Game.Climbing
         [SerializeField] private float climbJumpSafetyTimeout = 1f;
         [Tooltip("After the jump leaves the wall, seconds to rotate the character 180° to face the jump direction. Reattaching to walls is blocked until this turn completes.")]
         [SerializeField] private float jumpTurnDuration = 0.5f;
-        [Tooltip("On reattaching to a wall mid-jump, seconds to ease the camera framing (shoulder offset / side) from the held jump values back to normal climb settings. Rotation isn't snapped — free-look just resumes from where the camera is.")]
-        [SerializeField] private float camReattachRestoreTime = 0.3f;
 
         [Header("Jump Trajectory Line (BracedReady preview)")]
         [Tooltip("LineRenderer drawing the predicted jump arc while in BracedReady (set Use World Space). Optional — leave null to disable.")]
@@ -380,6 +380,7 @@ namespace Game.Climbing
         private InputHandler _input;
         private PlayerInput _playerInput;   // for direct Use/Cancel/Jump action subscriptions (climb-specific)
         private Transform _cam;   // gameplay camera, for camera-relative traversal input
+        private Camera _mainCam;  // the camera the CinemachineBrain drives (guards the after-brain override)
 
         // -- Animator (climb pose layer) --
         private Animator _animator;
@@ -449,9 +450,21 @@ namespace Game.Climbing
         private bool _readyReturning;       // easing _readyT back to 0 (return to climbing OR un-turn for a side-swap)
         private bool _pendingSwap;          // the un-turn is a side-swap → flip side + re-peek at _readyT==0
         private bool _pendulumFrozen;       // body pendulum held at rest (BracedReady)
-        private bool _cameraOverridden;     // BracedReady owns the camera (rig frozen, framing driven directly)
-        private bool _camMidSwap;           // a side-swap is routing the camera through the mid-point anchor
-        private Transform _swapAnchor;      // runtime mid-point the camera swings through during a swap
+        private bool _cameraOverridden;     // climb owns the camera (rig frozen) — arc peek or jump-hold
+        // -- BracedReady jump-arc orbit camera (drives the brain's output camera from the after-brain event) --
+        private bool _arcActive;            // peek arc engaged
+        private float _arcAngle;            // 0..180 along the arc (0/180 = the two peek sides, 90 = down the jump line)
+        private float _arcBlend;            // 0 = free-look, 1 = full arc
+        private Vector3 _arcCenter;         // trajectory-midpoint (horizontal, y=0)
+        private float _arcRadius, _arcInitialY, _arcFarY;
+        private Vector3 _arcWallDir = Vector3.right, _arcJumpDir = Vector3.forward, _arcLookAt;
+        private bool _jumpCamHold;          // jump/airborne: hold the captured camera pose, following the character
+        private Vector3 _jumpCamOffset;
+        private Quaternion _jumpCamRot = Quaternion.identity;
+        private bool _reattachBlend;        // easing Camera.main back to free-look after exit/reattach
+        private float _reattachT;
+        private Vector3 _reattachFromPos;
+        private Quaternion _reattachFromRot = Quaternion.identity;
 
         // -- Climb jump-off (from BracedReady) --
         private bool _climbJumping;         // wind-up: squaring up + ClimbJump clip, IK still pinned, awaiting leave-wall
@@ -460,20 +473,13 @@ namespace Game.Climbing
         private Quaternion _jumpTurnFrom = Quaternion.identity, _jumpTurnTo = Quaternion.identity;
         private float _jumpTurnT = 1f;      // 0→1 over jumpTurnDuration; the post-jump 180° turn to face the jump
         private bool _jumpReattachBlocked;  // can't re-grab until the post-jump turn completes
-        private bool _camSideRestoring;     // easing shoulder/side back to normal after a mid-jump reattach
-        private float _camSideRestoreT;
-        private Vector3 _camRestoreFromShoulder;
-        private float _camRestoreFromSide;
         private float _jumpTimer;
         private Vector3 _jumpOutwardDir = Vector3.forward;
-        private Vector3 _bracedReadyJumpDir = Vector3.forward;   // wall-perpendicular launch dir, cast at peek ENTER (pre-turn); reused by the jump + trajectory
+        private Vector3 _bracedReadyJumpDir = Vector3.forward;   // wall-perpendicular launch dir, cast at peek ENTER (pre-turn); reused by the jump + trajectory + arc
+        private Vector3 _bracedReadyJumpHit = Vector3.zero;      // wall-ray HIT point = arc "initial point"
         private Vector3[] _trajPoints;      // reused buffer for the predicted-arc preview
-        private Quaternion _jumpCamWorld = Quaternion.identity;   // peek camera world rotation held through the jump
         private float _useBufferTimer;      // buffered Use press (airborne wall-catch)
         private static readonly int _hClimbJump = Animator.StringToHash("ClimbJump");
-        private Vector3 _camSnapShoulder;
-        private float _camSnapSide;
-        private Quaternion _camSnapRootLocal = Quaternion.identity;
 
         private Vector3 _rhOutward = Vector3.forward;  // outward normal of the right-hand hold
         private Vector3 _lhOutward = Vector3.forward;  // outward normal of the left-hand hold
@@ -505,7 +511,8 @@ namespace Game.Climbing
             _cameraRig = GetComponentInParent<PlayerCameraRig>();
             _input = GetComponentInParent<InputHandler>();
             _playerInput = GetComponentInParent<PlayerInput>();
-            if (Camera.main != null) _cam = Camera.main.transform;
+            _mainCam = Camera.main;
+            if (_mainCam != null) _cam = _mainCam.transform;
 
             _animator = GetComponentInParent<Animator>();
             if (_animator != null)
@@ -557,6 +564,11 @@ namespace Game.Climbing
                 _smearHooked = true;
             }
 
+            // Drive the climb camera override AFTER the CinemachineBrain writes the transform (the brain updates
+            // via a PlayerLoop insertion that runs after MonoBehaviour.LateUpdate, so a LateUpdate write gets
+            // re-damped back toward free-look). This event fires right after the brain — our write is final.
+            CinemachineCore.CameraUpdatedEvent.AddListener(OnCameraUpdated);
+
             // Climb-specific inputs straight off PlayerInput (InputHandler is locomotion-only). Use = grab/return;
             // Cancel = exit (or, when braced, enter BracedReady — wired in a later increment).
             if (_playerInput != null && _playerInput.actions != null)
@@ -580,6 +592,8 @@ namespace Game.Climbing
                 ik.solver.OnPostUpdate -= ApplyBracedReadyTurn;
                 _smearHooked = false;
             }
+
+            CinemachineCore.CameraUpdatedEvent.RemoveListener(OnCameraUpdated);
 
             if (_playerInput != null && _playerInput.actions != null)
             {
@@ -723,8 +737,8 @@ namespace Game.Climbing
         {
             if (_isClimbing || _controlLock == null || _rig == null || _candidateSurface == null) return;
 
-            // Reattaching mid-jump: ease the camera framing back to normal (no rotation snap) over the new climb.
-            if (_cameraOverridden) BeginReattachCameraRestore();
+            // Reattaching mid-jump: blend the camera back to free-look (over the new climb).
+            if (_cameraOverridden) RestoreBracedReadyCamera();
 
             Vector3 rightPos = _candidatePos;
             Quaternion rightRot = _candidateRot;
@@ -778,8 +792,7 @@ namespace Game.Climbing
             _readyReturning = false;
             _pendingSwap = false;
             _pendulumFrozen = false;
-            _cameraOverridden = false;
-            _camMidSwap = false;
+            _arcActive = false;
             _climbJumping = false;
             _jumpAirborne = false;
             _jumpReattachBlocked = false;
@@ -832,11 +845,10 @@ namespace Game.Climbing
             _readyReturning = false;
             _pendingSwap = false;
             _pendulumFrozen = false;
-            _camMidSwap = false;
+            _arcActive = false;
             _climbJumping = false;
             _jumpAirborne = false;
             _jumpReattachBlocked = false;
-            _camSideRestoring = false;
             _rig.SetMasterWeight(0f);
             SetArmBendDirections(0f);            // hand the arm bend back to FBBIK's default
             SetLegBendDirections(0f);            // hand the knee bend back too
@@ -852,10 +864,9 @@ namespace Game.Climbing
         /// <summary>Per-frame climb update: free-look, IK weight fade, effector tick, body follow.</summary>
         private void TickClimb(float dt)
         {
-            // Keep free-look on (ExternalControlState froze it on entry) — EXCEPT in BracedReady, where the
-            // peek owns the camera (frozen + driven directly).
+            // Keep free-look on (ExternalControlState froze it on entry) — EXCEPT while the climb owns the camera
+            // (arc peek / jump-hold), where the rig is frozen and Camera.main is driven in LateUpdate.
             if (!_cameraOverridden) _cameraRig?.SetFrozen(false);
-            if (_camSideRestoring) TickReattachCameraRestore(dt);   // ease shoulder/side back after a mid-jump reattach
 
             // Post-mantle get-up: cross-fade the climb pose out to the standing base idle (control still locked).
             if (_gettingUp) { TickGetup(dt); return; }
@@ -904,7 +915,6 @@ namespace Game.Climbing
             _rig.Tick(dt);
             StepPendulum(dt);
             UpdateBodyPose();
-            if (_climbJumping) HoldJumpCamera();   // hold the camera at the peek (after the body pose squares up)
 
             // Trigger the mantle only AFTER UpdateBodyPose has placed the body for the current hands —
             // capturing _mantleStart before this froze a stale, pre-hand-step position, so the body snapped
@@ -1260,8 +1270,7 @@ namespace Game.Climbing
 
             // Side = inverse of the camera look direction (dev preference): looking toward body-right → peek
             // LEFT (release left hand); looking left or straight → peek RIGHT.
-            Vector3 lookFwd = peekCameraRoot != null ? peekCameraRoot.forward
-                            : (_cam != null ? _cam.forward : transform.forward);
+            Vector3 lookFwd = _cam != null ? _cam.forward : transform.forward;
             bool releaseLeft = Vector3.Dot(lookFwd, transform.right) > 0f;
             _readySign = releaseLeft ? +1 : -1;
             _mode = ClimbMode.BracedReady;
@@ -1269,24 +1278,21 @@ namespace Game.Climbing
             _pendingSwap = false;
             _pendulumFrozen = true;
             _pendulum?.Reset(_rig.HandAverage);   // settle the pendulum so the body holds still
-            EnableSwapAnchor();                   // place the swap mid-point BEFORE the camera starts moving
-            SnapshotBracedReadyCamera();          // freeze the rig + capture framing to restore on exit
+            SnapshotBracedReadyCamera();          // compute the arc + freeze the rig + engage the arc camera
             Debug.Log($"[ClimbController] BracedReady — releasing {(releaseLeft ? "LEFT" : "RIGHT")} hand.");
         }
 
         /// <summary>BracedReady per-frame: ease the turn in/out, fade the released hand's IK pin, keep feet planted.</summary>
         private void TickBracedReady(float dt)
         {
-            // Clear the swap routing once the (re-)turn has fully settled (so the next Use-return uses the snapshot).
-            if (_camMidSwap && !_readyReturning && _readyT >= 0.999f) _camMidSwap = false;
-
             // Side-swap: once the peek is settled, pushing look PAST the opposite-side threshold un-turns this
-            // side then re-peeks the other (latched; ignored mid-transition so a turn can't be interrupted).
+            // side then re-peeks the other (latched; ignored mid-transition so a turn can't be interrupted). The
+            // camera arc angle follows _readySign automatically (sweeps 0↔180 through 90).
             if (!_readyReturning && _readyT >= 0.999f && _input != null)
             {
                 float lx = _input.LookInput.x;
                 bool swap = (_readySign > 0 && lx > sideToggleThreshold) || (_readySign < 0 && lx < -sideToggleThreshold);
-                if (swap) { _readyReturning = true; _pendingSwap = true; _camMidSwap = true; }
+                if (swap) { _readyReturning = true; _pendingSwap = true; }
             }
 
             float target = _readyReturning ? 0f : 1f;
@@ -1347,117 +1353,132 @@ namespace Game.Climbing
             }
         }
 
-        /// <summary>Freeze PlayerCameraRig and snapshot the camera framing (root local rotation + shoulder/side)
-        /// so the peek can drive it and restore it cleanly on exit.</summary>
+        /// <summary>Engage the jump-arc orbit camera: compute the arc from the current jump trajectory, freeze
+        /// PlayerCameraRig, and start blending the camera onto the arc (applied in the after-brain event).</summary>
         private void SnapshotBracedReadyCamera()
         {
-            if (peekVcamFollow != null)
-            {
-                _camSnapShoulder = peekVcamFollow.ShoulderOffset;
-                _camSnapSide = peekVcamFollow.CameraSide;
-            }
-            if (peekCameraRoot != null) _camSnapRootLocal = peekCameraRoot.localRotation;
-            _camSideRestoring = false;   // a new peek takes over the framing
+            if (_cam == null && Camera.main != null) _cam = Camera.main.transform;   // safety re-resolve
+            ComputeArc();
+            _arcActive = true;
+            _arcBlend = 0f;
+            _arcAngle = _readySign >= 0 ? 0f : 180f;   // start at the entry side's arc end
+            _jumpCamHold = false;
+            _reattachBlend = false;
             _cameraOverridden = true;
             _cameraRig?.SetFrozen(true);
         }
 
-        /// <summary>Drives the peek camera toward the current side, scaled by _readyT (so it swings through the
-        /// snapshot framing during a side-swap, in lockstep with the body turn). +sign = LEFT, −sign = right.</summary>
+        /// <summary>Per-frame arc STATE update (the after-brain event does the actual camera move): sweep the angle toward the
+        /// current side's end (0 or 180, through 90 on a swap) and ease the blend in — out when returning to climb.</summary>
         private void DriveBracedReadyCamera()
         {
-            if (!_cameraOverridden) return;
-            float s = _readySign >= 0 ? 1f : -1f;
-            float k = _readyT;
-            if (peekCameraRoot != null)
-            {
-                // The _readyT==0 waypoint is the ANCHOR mid-point during a swap (camera swings sideA→anchor→sideB),
-                // else the snapshot (entry/return). Same working local Slerp either way.
-                Quaternion waypoint = (_camMidSwap && _swapAnchor != null) ? AnchorMidLocal() : _camSnapRootLocal;
-                peekCameraRoot.localRotation = Quaternion.Slerp(waypoint, Quaternion.Euler(0f, peekRootYaw * s, 0f), k);
-            }
-            if (peekVcamFollow != null)
-            {
-                Vector3 sh = peekVcamFollow.ShoulderOffset;
-                sh.x = Mathf.Lerp(_camSnapShoulder.x, peekShoulderX, k);
-                peekVcamFollow.ShoulderOffset = sh;
-                peekVcamFollow.CameraSide = Mathf.Lerp(_camSnapSide, -peekCameraSide * s, k);
-            }
+            if (!_arcActive) return;
+            float target = _readySign >= 0 ? 0f : 180f;
+            _arcAngle = Mathf.MoveTowards(_arcAngle, target, (180f / Mathf.Max(0.0001f, arcSwapDuration)) * Time.deltaTime);
+            bool returningToClimb = _readyReturning && !_pendingSwap;
+            _arcBlend = Mathf.MoveTowards(_arcBlend, returningToClimb ? 0f : 1f, Time.deltaTime / Mathf.Max(0.0001f, arcBlendDuration));
         }
 
-        /// <summary>Restores the snapshot camera framing and hands free-look back to PlayerCameraRig. Call only
-        /// when the camera is back near squared (so SetFrozen(false)'s resync doesn't snap).</summary>
+        /// <summary>Hand the camera back: capture Camera.main's current pose, unfreeze the rig, and blend the camera
+        /// back to free-look over camReattachRestoreTime (after-brain event). Used for Use-return, exit, and mid-jump reattach.</summary>
         private void RestoreBracedReadyCamera()
         {
             if (!_cameraOverridden) return;
-            if (peekCameraRoot != null) peekCameraRoot.localRotation = _camSnapRootLocal;
-            if (peekVcamFollow != null)
-            {
-                peekVcamFollow.ShoulderOffset = _camSnapShoulder;
-                peekVcamFollow.CameraSide = _camSnapSide;
-            }
+            if (_cam != null) { _reattachFromPos = _cam.position; _reattachFromRot = _cam.rotation; }
+            _reattachBlend = true;
+            _reattachT = 0f;
+            _arcActive = false;
+            _jumpCamHold = false;
             _cameraOverridden = false;
-            _cameraRig?.SetFrozen(false);
-            DisableSwapAnchor();
+            _cameraRig?.SetFrozen(false);   // free-look resumes; the after-brain event blends the camera to it
         }
 
-        /// <summary>Mid-jump reattach: hand free-look back from the CURRENT rotation (no rotation snap) and start
-        /// easing the shoulder/side framing back to normal climb settings over camReattachRestoreTime.</summary>
-        private void BeginReattachCameraRestore()
+        /// <summary>Computes the jump-arc: center = midpoint of the wall-hit (initial) and the trajectory end;
+        /// radius = half the horizontal distance (× arcRadiusScale, clamped); axes = jump dir (90°) + wall tangent
+        /// (0°/180°). Far/90° height dips to the raw midpoint unless orbitAtCharacterHeight; arcHeightOffset raises
+        /// the camera (look-at stays on the middle point).</summary>
+        private void ComputeArc()
         {
-            if (peekVcamFollow != null)
+            Vector3 initial = _bracedReadyJumpHit;
+            int count = FillTrajectory();
+            Vector3 end = count > 0 ? _trajPoints[count - 1] : initial + _bracedReadyJumpDir * 3f;
+            Vector3 mid = (initial + end) * 0.5f;
+            float baseInitialY = initial.y;
+            float baseFarY = orbitAtCharacterHeight ? initial.y : mid.y;
+            _arcInitialY = baseInitialY + arcHeightOffset;
+            _arcFarY = baseFarY + arcHeightOffset;
+            _arcCenter = new Vector3(mid.x, 0f, mid.z);
+            float baseRadius = Vector3.Distance(new Vector3(initial.x, 0f, initial.z), new Vector3(end.x, 0f, end.z)) * 0.5f;
+            _arcRadius = Mathf.Clamp(baseRadius * arcRadiusScale, arcRadiusClamp.x, arcRadiusClamp.y);
+            _arcJumpDir = _bracedReadyJumpDir;
+            _arcWallDir = Vector3.Cross(Vector3.up, _arcJumpDir).normalized;
+            _arcLookAt = new Vector3(mid.x, baseFarY, mid.z);
+        }
+
+        /// <summary>Camera position on the arc at angle a (deg): 0/180 = ±wall tangent (initial height), 90 = jump
+        /// dir (far height). Horizontal circle of radius R around the trajectory midpoint.</summary>
+        private Vector3 ArcCameraPos(float aDeg)
+        {
+            float a = aDeg * Mathf.Deg2Rad;
+            Vector3 h = _arcCenter + _arcRadius * (Mathf.Cos(a) * _arcWallDir + Mathf.Sin(a) * _arcJumpDir);
+            return new Vector3(h.x, Mathf.Lerp(_arcInitialY, _arcFarY, Mathf.Sin(a)), h.z);
+        }
+
+        /// <summary>Applies the climb camera override to the brain's output camera, fired from
+        /// CinemachineCore.CameraUpdatedEvent so it runs AFTER the brain writes the transform (a LateUpdate write
+        /// would be re-damped back toward free-look). Drives the peek arc (blended), the jump-hold (follow the
+        /// character), or the reattach/exit blend back to free-look.</summary>
+        private void OnCameraUpdated(CinemachineBrain brain)
+        {
+            if (_cam == null && Camera.main != null) { _mainCam = Camera.main; _cam = _mainCam.transform; }
+            if (_cam == null) return;
+            if (brain == null || brain.OutputCamera != _mainCam) return;   // only the camera we own
+            if (_arcActive)
             {
-                _camRestoreFromShoulder = peekVcamFollow.ShoulderOffset;
-                _camRestoreFromSide = peekVcamFollow.CameraSide;
+                Vector3 arcPos = ArcCameraPos(_arcAngle);
+                Vector3 toC = _arcLookAt - arcPos;
+                Quaternion arcRot = toC.sqrMagnitude > 1e-6f ? Quaternion.LookRotation(toC.normalized, Vector3.up) : _cam.rotation;
+                _cam.SetPositionAndRotation(Vector3.Lerp(_cam.position, arcPos, _arcBlend),
+                                            Quaternion.Slerp(_cam.rotation, arcRot, _arcBlend));
             }
-            _camSideRestoring = true;
-            _camSideRestoreT = 0f;
-            _cameraOverridden = false;
-            DisableSwapAnchor();
-            _cameraRig?.SetFrozen(false);   // resyncs from the current held rotation → free-look continues, no snap
-        }
-
-        /// <summary>Per-frame ease of the shoulder/side framing back to the snapshot after a reattach (independent
-        /// of the rig freeze; the rotation is already free-look).</summary>
-        private void TickReattachCameraRestore(float dt)
-        {
-            if (!_camSideRestoring) return;
-            _camSideRestoreT = Mathf.Min(1f, _camSideRestoreT + dt / Mathf.Max(0.0001f, camReattachRestoreTime));
-            float t = Mathf.SmoothStep(0f, 1f, _camSideRestoreT);
-            if (peekVcamFollow != null)
+            else if (_jumpCamHold)
             {
-                Vector3 sh = peekVcamFollow.ShoulderOffset;
-                sh.x = Mathf.Lerp(_camRestoreFromShoulder.x, _camSnapShoulder.x, t);
-                peekVcamFollow.ShoulderOffset = sh;
-                peekVcamFollow.CameraSide = Mathf.Lerp(_camRestoreFromSide, _camSnapSide, t);
+                _cam.SetPositionAndRotation(transform.position + _jumpCamOffset, _jumpCamRot);
             }
-            if (_camSideRestoreT >= 1f) _camSideRestoring = false;
+            else if (_reattachBlend)
+            {
+                _reattachT = Mathf.Min(1f, _reattachT + Time.deltaTime / Mathf.Max(0.0001f, camReattachRestoreTime));
+                float t = Mathf.SmoothStep(0f, 1f, _reattachT);
+                _cam.SetPositionAndRotation(Vector3.Lerp(_reattachFromPos, _cam.position, t),
+                                            Quaternion.Slerp(_reattachFromRot, _cam.rotation, t));
+                if (_reattachT >= 1f) _reattachBlend = false;
+            }
         }
 
-        /// <summary>Draws the predicted jump arc (from the captured wall-perpendicular dir) into the LineRenderer,
-        /// truncated at the first collision. Uses the motor's own integration so it matches the real jump.</summary>
-        private void UpdateTrajectory()
+        /// <summary>Fills _trajPoints with the predicted jump arc (motor integration), truncated at the first
+        /// collision; returns the point count (endpoint = _trajPoints[count-1]).</summary>
+        private int FillTrajectory()
         {
-            if (peekTrajectoryLine == null || _motor == null) return;
+            if (_motor == null) return 0;
             int n = Mathf.Max(2, trajectoryPoints);
             if (_trajPoints == null || _trajPoints.Length != n) _trajPoints = new Vector3[n];
-
             Vector3 start = transform.position + Vector3.up * detectHeightOffset;   // ~chest launch origin
             _motor.PredictLaunchArc(start, _bracedReadyJumpDir * climbJumpOutward, climbJumpDecay, climbJumpUp,
                                     trajectoryTimeStep, _trajPoints);
-
             int count = _trajPoints.Length;
             for (int i = 1; i < _trajPoints.Length; i++)
-            {
                 if (Physics.Linecast(_trajPoints[i - 1], _trajPoints[i], out RaycastHit hit,
                                      trajectoryCollisionMask, QueryTriggerInteraction.Ignore))
-                {
-                    _trajPoints[i] = hit.point;
-                    count = i + 1;
-                    break;
-                }
-            }
+                { _trajPoints[i] = hit.point; count = i + 1; break; }
+            return count;
+        }
 
+        /// <summary>Draws the predicted jump arc into the LineRenderer (matches the real jump via the motor sim).</summary>
+        private void UpdateTrajectory()
+        {
+            if (peekTrajectoryLine == null) return;
+            int count = FillTrajectory();
+            if (count < 1) { HideTrajectory(); return; }
             peekTrajectoryLine.positionCount = count;
             for (int i = 0; i < count; i++) peekTrajectoryLine.SetPosition(i, _trajPoints[i]);
             if (!peekTrajectoryLine.enabled) peekTrajectoryLine.enabled = true;
@@ -1483,7 +1504,9 @@ namespace Game.Climbing
             {
                 Vector3 n = Vector3.ProjectOnPlane(wallHit.normal, Vector3.up);
                 if (n.sqrMagnitude > 1e-4f) outward = n.normalized;
+                _bracedReadyJumpHit = wallHit.point;   // arc "initial point"
             }
+            else _bracedReadyJumpHit = chest;          // fallback
             return outward;
         }
 
@@ -1494,12 +1517,14 @@ namespace Game.Climbing
             _climbJumping = true;
             _jumpTimer = 0f;
             _pendingSwap = false;
-            _camMidSwap = false;
             _readyReturning = false;
             // Use the wall-perpendicular direction captured (squared, pre-turn) at BracedReady enter — so the
             // body's peek turn never inclines the launch. Recompute only if it's somehow unset.
             _jumpOutwardDir = _bracedReadyJumpDir.sqrMagnitude > 1e-4f ? _bracedReadyJumpDir : ComputeWallOutward();
-            if (peekCameraRoot != null) _jumpCamWorld = peekCameraRoot.rotation;   // hold this peek framing through the jump
+            // Freeze the current camera pose (from the arc) and hold it following the character through the jump.
+            if (_cam != null) { _jumpCamOffset = _cam.position - transform.position; _jumpCamRot = _cam.rotation; }
+            _arcActive = false;
+            _jumpCamHold = true;
             if (_animator != null && _climbLayerIndex >= 0)
             {
                 if (_animator.HasState(_climbLayerIndex, _hClimbJump))
@@ -1516,17 +1541,9 @@ namespace Game.Climbing
         {
             _jumpTimer += dt;
             _readyT = Mathf.MoveTowards(_readyT, 0f, dt / Mathf.Max(0.0001f, bracedReadyTurnDuration));  // square the body up
-            // The camera is HELD at its captured peek world rotation (applied after UpdateBodyPose so the
-            // squaring body-root can't drag it) — see HoldJumpCamera().
+            // Camera is held (following the character) by the _jumpCamHold branch in LateUpdate.
             UpdateFeet(dt);
             if (_jumpTimer >= climbJumpSafetyTimeout) FinishClimbJump();
-        }
-
-        /// <summary>Holds the camera target at the peek world rotation captured at jump start (after the body pose,
-        /// so the squaring body / motor can't drag the camera child). Restored at FinishRelease.</summary>
-        private void HoldJumpCamera()
-        {
-            if (_cameraOverridden && peekCameraRoot != null) peekCameraRoot.rotation = _jumpCamWorld;
         }
 
         /// <summary>Animation event on the ClimbJump clip — the frame the character leaves the wall.</summary>
@@ -1580,7 +1597,7 @@ namespace Game.Climbing
                 _rig.Tick(dt);
             }
             if (_animator != null && _climbLayerIndex >= 0) _animator.SetLayerWeight(_climbLayerIndex, 1f);
-            HoldJumpCamera();   // hold the viewpoint, following the character through the arc
+            // Camera held (following the character) by the _jumpCamHold branch in LateUpdate.
 
             CharacterController cc = _motor?.Controller;
             // Land only once descending, so the launch frame's stale isGrounded doesn't end the hold instantly.
@@ -1607,37 +1624,6 @@ namespace Game.Climbing
             }
             if (_cameraOverridden) RestoreBracedReadyCamera();
             Debug.Log("[ClimbController] Jump airborne hold ended (land / fall).");
-        }
-
-        /// <summary>Lazily creates (once) + positions the swap mid-point anchor at the player root + offset, and
-        /// enables it. Called on peek entry BEFORE the camera starts moving, so a stale position is never swung
-        /// through.</summary>
-        private void EnableSwapAnchor()
-        {
-            if (_swapAnchor == null)
-            {
-                _swapAnchor = new GameObject("ClimbPeekSwapAnchor").transform;
-                _swapAnchor.SetParent(transform, false);
-            }
-            _swapAnchor.localPosition = peekSwapAnchorOffset;
-            _swapAnchor.localRotation = Quaternion.identity;
-            _swapAnchor.gameObject.SetActive(true);
-        }
-
-        private void DisableSwapAnchor()
-        {
-            if (_swapAnchor != null) _swapAnchor.gameObject.SetActive(false);
-        }
-
-        /// <summary>The swap mid-point as a camera-root LOCAL rotation: the root faces AWAY from the anchor so the
-        /// third-person camera sits AT the anchor (behind the player → the camera orbits around the back). Yaw-only.</summary>
-        private Quaternion AnchorMidLocal()
-        {
-            Vector3 dir = Vector3.ProjectOnPlane(peekCameraRoot.position - _swapAnchor.position, Vector3.up);
-            if (dir.sqrMagnitude < 1e-5f) dir = transform.forward;
-            Quaternion midWorld = Quaternion.LookRotation(dir.normalized, Vector3.up);
-            Transform p = peekCameraRoot.parent;
-            return (p != null ? Quaternion.Inverse(p.rotation) : Quaternion.identity) * midWorld;
         }
 
         /// <summary>Post-solve head turn: the body ROOT already yawed by the torso angle (grip-preserving, in
