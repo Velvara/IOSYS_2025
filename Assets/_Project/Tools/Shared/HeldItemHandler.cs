@@ -17,6 +17,13 @@ public class HeldItemHandler
         if (prefab != null && origin != null)
         {
             heldObj = Object.Instantiate(prefab, origin.transform);
+
+            // The held copy is purely cosmetic. Its colliders must be disabled: the real
+            // projectile is instantiated exactly on top of it (handSlot) at the release
+            // frame, and a live collider there makes the projectile hit it and self-destruct
+            // (ThrowableObject.OnCollisionEnter destroys on any non-Player contact).
+            foreach (Collider col in heldObj.GetComponentsInChildren<Collider>(true))
+                col.enabled = false;
         }
     }
 
