@@ -35,13 +35,18 @@ public class ThrowAim : AimModeBase
         base.EnterMode();
 
         if (animator)
-            animator.CrossFade("ThrowPose", 0.2f, animator.GetLayerIndex("AimingUpperbody"));
+            animator.CrossFade("ThrowPose", 0.2f, animator.GetLayerIndex("AimingUpperBody"));
 
         if (playerInput != null && playerInput.actions["Use"] != null)
+        {
+            // -= before += : idempotent even if EnterMode ever runs twice without an ExitMode.
+            playerInput.actions["Use"].performed -= HandleUse;
             playerInput.actions["Use"].performed += HandleUse;
+        }
 
         if (!isThrowCooldown)
         {
+            UpdateCalculatedForce();   // don't draw the first frame with a stale (0) force
             trajectory?.DrawTrajectory(_currentCalculatedThrowForce, aimDirection.forward);
             heldHandler.SpawnHeldItem();
         }
@@ -50,23 +55,26 @@ public class ThrowAim : AimModeBase
     public override void UpdateMode()
     {
         base.UpdateMode();
-        // 1. Calculate the final throw force magnitude
-        float boostMultiplier = GetThrowForceMultiplier();
 
-        // Additive Boost: Base force + (Base force * Boost Multiplier)
-        _currentCalculatedThrowForce = throwForce + (throwForce * boostMultiplier);
+        UpdateCalculatedForce();
 
         if (!isThrowCooldown)
         {
-            trajectory.DrawTrajectory(_currentCalculatedThrowForce, aimDirection.forward);
+            trajectory?.DrawTrajectory(_currentCalculatedThrowForce, aimDirection.forward);
         }
 
         Vector2 input = MoveInput;
         if (animator)
         {
-            animator.SetFloat("AimMoveX", input.x);
-            animator.SetFloat("AimMoveY", input.y);
+            animator.SetFloat(AimMoveXHash, input.x);
+            animator.SetFloat(AimMoveYHash, input.y);
         }
+    }
+
+    /// <summary>Base force plus the additive look-up boost: force × (1 + curve(pitch) × multiplier).</summary>
+    private void UpdateCalculatedForce()
+    {
+        _currentCalculatedThrowForce = throwForce + (throwForce * GetThrowForceMultiplier());
     }
 
     public override void ExitMode()
@@ -76,7 +84,7 @@ public class ThrowAim : AimModeBase
         if (animator)
         {
             animator.CrossFade("Idle Walk Run Blend", 0.2f, 0);
-            animator.CrossFade("UpperBodyIdle", 0.2f, 2);
+            animator.CrossFade("UpperBodyIdle", 0.2f, animator.GetLayerIndex("AimingUpperBody"));
         }
 
         trajectory?.HideTrajectory();
@@ -148,47 +156,22 @@ public class ThrowAim : AimModeBase
             trajectory?.DrawTrajectory(_currentCalculatedThrowForce, aimDirection.forward);
     }
 
+    /// <summary>
+    /// Additive boost factor (0..throwForceLookMultiplier) from the camera's UPWARD pitch:
+    /// 0 when looking level or down, curve(0..90°) × multiplier when looking up — so lobbed
+    /// throws get extra force without touching flat throws.
+    /// </summary>
     private float GetThrowForceMultiplier()
     {
-        Transform cameraTransform = AimManager.Instance.CameraTransform;
-        if (cameraTransform == null)
-        {
-            return 1.0f; // Return 1.0 (no change) if camera is missing
-        }
+        Transform cameraTransform = AimManager.Instance != null ? AimManager.Instance.CameraTransform : null;
+        if (cameraTransform == null) return 0f;   // no camera → no boost
 
+        // Euler X: looking up reads as 360→270; map that to a 0..90 up-pitch magnitude.
         float pitchAngle = cameraTransform.localEulerAngles.x;
-        float upPitchAngle = 0f;
-        float normalizedPitchForCurve = 0f;
+        if (pitchAngle <= 180f) return 0f;        // level or looking down
 
-        // --- 1. Map 360-270 range to 0-90 pitch magnitude (0=straight, 90=max up) ---
-        if (pitchAngle > 180f && pitchAngle <= 360f)
-        {
-            upPitchAngle = 360f - pitchAngle;
-            normalizedPitchForCurve = Mathf.Clamp(upPitchAngle, 0f, 90f);
-        }
-
-        // --- 2. Calculate Force Boost Factor ---
-        if (normalizedPitchForCurve > 0.001f)
-        {
-            // Evaluate the curve (0 to 1) based on the upward pitch magnitude (0 to 90)
-            float curveFactor = throwForceCurve.Evaluate(normalizedPitchForCurve);
-
-            // The total force multiplier is 1.0 (base) plus the boost derived from the curve
-            // and the public multiplier.
-            float boostFactor = curveFactor * throwForceLookMultiplier;
-
-            // Since the prompt asks to multiply `throwForce` by the multiplier, 
-            // we'll return the full factor, including the base 1.0 force.
-            // Wait, the prompt asks to multiply 'throwForce' by 'that number' (the curve value * lookMultiplier).
-            // Let's assume the boost is ADDED to the base force for sane physics.
-            // If we want to strictly follow the prompt: we only return the boost magnitude.
-
-            // Let's implement this as a PURE boost magnitude (i.e., 0 to N).
-            return boostFactor;
-        }
-
-        // 3. Return 0 (no additional force) if looking straight or down
-        return 0f;
+        float upPitch = Mathf.Clamp(360f - pitchAngle, 0f, 90f);
+        return throwForceCurve.Evaluate(upPitch) * throwForceLookMultiplier;
     }
     public override void OnItemChanged(GameObject newItem)
     {

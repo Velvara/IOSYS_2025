@@ -69,6 +69,7 @@ namespace Game.PlayerV2
         private Vector3 _launchVelocity;
         private float _launchDecayRate;
         private float _airControlSuppressTimer;   // > 0 = ignore air-control input (clean launch arc)
+        private bool _controllerVelocityStale;    // controller.velocity still reports pre-takeover motion
 
         // -- Animator hash IDs --
         private readonly int _hSpeed, _hMotionSpeed, _hGrounded, _hJump, _hFreeFall, _hSprint, _hFatigued, _hStealth;
@@ -123,6 +124,11 @@ namespace Game.PlayerV2
         {
             _fallTimeoutDelta = _cfg.FallTimeout;
 
+            // Ground contact eats any leftover launch impulse (climb jump-off): without this the
+            // decaying launch keeps pushing after touchdown and the character slides as if on ice
+            // while it fades out. Launches are an AIR mechanic — grounded knockback would be its own thing.
+            _launchVelocity = Vector3.zero;
+
             if (_hasAnimator)
             {
                 _animator.SetBool(_hGrounded, true);
@@ -176,6 +182,11 @@ namespace Game.PlayerV2
         {
             _speed = 0f;
             _animationBlend = 0f;
+            // The external system owns the body now — a leftover launch (e.g. a mid-air wall grab
+            // during a climb jump-off arc) must not survive frozen through the takeover and shove
+            // the character when locomotion resumes. (The jump-off itself is unaffected: its launch
+            // is applied AFTER control is released, so no suspend runs in between.)
+            _launchVelocity = Vector3.zero;
             if (_hasAnimator)
             {
                 _animator.SetFloat(_hSpeed, 0f);
@@ -216,6 +227,16 @@ namespace Game.PlayerV2
         /// clean — only launch + gravity, no input steering). Grounded movement is unaffected.</summary>
         public void SuppressAirControl(float seconds) => _airControlSuppressTimer = Mathf.Max(_airControlSuppressTimer, seconds);
 
+        /// <summary>
+        /// Marks the CharacterController's reported velocity as stale. While an external system (climb,
+        /// hookshot drag, cutscene) moves the body directly, <c>controller.velocity</c> freezes at its last
+        /// Move() value; if the first locomotion tick after handback seeded <see cref="_speed"/> from that
+        /// leftover, every climb-jump → reattach → jump cycle would inherit (and compound) the previous
+        /// flight's speed — the "force buildup" bug. Called on ReleaseExternalControl; the flag clears
+        /// after the next Move() refreshes the controller's velocity.
+        /// </summary>
+        public void MarkControllerVelocityStale() => _controllerVelocityStale = true;
+
         /// <summary>Predicts the path of a decaying-launch + gravity arc (no air control), filling <paramref
         /// name="points"/> from <paramref name="startPos"/>. Uses the SAME per-step integration as TickAir/ApplyMove
         /// (gravity → move → launch decay) with the motor's own gravity, so a trajectory line matches the real jump.</summary>
@@ -242,8 +263,22 @@ namespace Game.PlayerV2
         {
             if (moveInput == Vector2.zero) targetSpeed = 0f;
 
-            float currentHorizontalSpeed =
-                new Vector3(_controller.velocity.x, 0f, _controller.velocity.z).magnitude;
+            // Measure only the INPUT-driven part of the controller's velocity:
+            //  - subtract the launch velocity (it's additive in ApplyMove; leaving it in would feed the
+            //    launch back into _speed every air frame and re-apply it along the stale _moveDirection —
+            //    the climb-jump force-buildup / sideways-drift bug),
+            //  - and ignore the controller's velocity entirely on the first tick after an external system
+            //    (climb/drag) moved the body, when it still reports pre-takeover motion.
+            float currentHorizontalSpeed;
+            if (_controllerVelocityStale)
+            {
+                currentHorizontalSpeed = _speed;
+            }
+            else
+            {
+                Vector3 v = _controller.velocity;
+                currentHorizontalSpeed = new Vector3(v.x - _launchVelocity.x, 0f, v.z - _launchVelocity.z).magnitude;
+            }
 
             float inputMagnitude = Mathf.Clamp01(moveInput.magnitude);
             float scaledTarget = ignoreStickScaling ? targetSpeed : targetSpeed * inputMagnitude;
@@ -306,6 +341,9 @@ namespace Game.PlayerV2
             _controller.Move(_moveDirection.normalized * (_speed * dt) +
                              _launchVelocity * dt +
                              new Vector3(0f, _verticalVelocity, 0f) * dt);
+
+            // This Move() refreshed controller.velocity — it's trustworthy again from the next tick.
+            _controllerVelocityStale = false;
 
             // Decay the launch impulse toward zero so air control blends back to normal.
             if (_launchVelocity != Vector3.zero)

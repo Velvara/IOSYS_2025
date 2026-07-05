@@ -214,7 +214,7 @@ public class HookshotDragMode : AimModeBase
 
             // Ensure upper body returns to locomotion state
             animator.CrossFade("Idle Walk Run Blend", 0.2f, 0);
-            animator.CrossFade("UpperBodyIdle", 0.2f, 2);
+            animator.CrossFade("UpperBodyIdle", 0.2f, animator.GetLayerIndex("AimingUpperBody"));
         }
 
         if (AimManager.Instance != null)

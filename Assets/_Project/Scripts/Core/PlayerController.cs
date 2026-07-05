@@ -116,7 +116,13 @@ namespace Game.PlayerV2
         // While active, the state machine sits in ExternalControl (no locomotion/look).
         public bool IsExternalControlActive { get; private set; }
         public void RequestExternalControl() => IsExternalControlActive = true;
-        public void ReleaseExternalControl() => IsExternalControlActive = false;
+        public void ReleaseExternalControl()
+        {
+            IsExternalControlActive = false;
+            // The external system moved the body directly, so controller.velocity is a leftover from
+            // before the takeover — don't let the first locomotion tick seed its speed from it.
+            _motor?.MarkControllerVelocityStale();
+        }
 
         #endregion
 

@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 public class TrajectoryPredictor : MonoBehaviour
@@ -31,19 +30,22 @@ public class TrajectoryPredictor : MonoBehaviour
             throwAim = GameObject.FindFirstObjectByType<ThrowAim>();
     }
 
+    // Reused sample buffer — DrawTrajectory runs every frame while aiming, so it must not allocate.
+    private Vector3[] _points;
+
     public void DrawTrajectory(float throwForce, Vector3 aimDirection)
     {
-        if (throwAim == null) return;
+        if (throwAim == null || throwOrigin == null) return;
 
-        Vector3 startPos = throwOrigin.position;
-        Vector3 startVelocity = aimDirection * throwForce;
+        int capacity = resolution + 1;
+        if (_points == null || _points.Length < capacity)
+            _points = new Vector3[capacity];
 
-        List<Vector3> points = new List<Vector3>();
+        Vector3 currentPosition = throwOrigin.position;
+        Vector3 currentVelocity = aimDirection * throwForce;
 
-        Vector3 currentPosition = startPos;
-        Vector3 currentVelocity = startVelocity;
-
-        points.Add(currentPosition);
+        _points[0] = currentPosition;
+        int count = 1;
 
         for (int i = 0; i < resolution; i++)
         {
@@ -51,12 +53,11 @@ public class TrajectoryPredictor : MonoBehaviour
             currentVelocity += Physics.gravity * timeStep;
 
             // Check for collisions
-            if (Physics.Raycast(currentPosition, nextPosition - currentPosition,
-                out RaycastHit hit,
-                (nextPosition - currentPosition).magnitude,
-                collisionLayers))
+            Vector3 segment = nextPosition - currentPosition;
+            if (Physics.Raycast(currentPosition, segment, out RaycastHit hit,
+                segment.magnitude, collisionLayers))
             {
-                points.Add(hit.point);
+                _points[count++] = hit.point;
                 if (landingMarkerInstance != null)
                 {
                     landingMarkerInstance.transform.position = hit.point;
@@ -66,14 +67,15 @@ public class TrajectoryPredictor : MonoBehaviour
             }
 
             currentPosition = nextPosition;
-            points.Add(currentPosition);
+            _points[count++] = currentPosition;
         }
 
-        // Update LineRenderer
+        // Update LineRenderer (per-point writes — SetPositions would need an exact-size array = garbage)
         if (lineRenderer != null)
         {
-            lineRenderer.positionCount = points.Count;
-            lineRenderer.SetPositions(points.ToArray());
+            lineRenderer.positionCount = count;
+            for (int i = 0; i < count; i++)
+                lineRenderer.SetPosition(i, _points[i]);
         }
     }
 

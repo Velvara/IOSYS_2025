@@ -80,6 +80,23 @@ namespace Game.PlayerV2
         }
 
         /// <summary>
+        /// Points free-look in the given world direction, regardless of frozen state — e.g. climbing
+        /// primes the camera to face into the new wall on a mid-air grab. Goes through the INTERNAL
+        /// yaw/pitch (a direct target-transform write doesn't survive: unfrozen, LateUpdate rewrites
+        /// it from these angles next frame; frozen, a parent rotation can drag it before the
+        /// unfreeze-resync reads it). Also writes the transform so a same-frame resync agrees.
+        /// </summary>
+        public void SetLookDirection(Vector3 worldDirection)
+        {
+            if (_cinemachineCameraTarget == null || worldDirection.sqrMagnitude < 1e-6f) return;
+            Vector3 e = Quaternion.LookRotation(worldDirection.normalized, Vector3.up).eulerAngles;
+            _targetYaw = e.y;
+            _targetPitch = Mathf.Clamp(NormalizeAngleSigned(e.x), _bottomClamp, _topClamp);
+            _cinemachineCameraTarget.rotation = Quaternion.Euler(
+                _targetPitch + _cameraAngleOverride, _targetYaw, 0f);
+        }
+
+        /// <summary>
         /// Freezes or unfreezes camera look. On unfreeze the yaw/pitch are re-synced from
         /// the target's current rotation so control resumes without a snap.
         /// </summary>

@@ -34,7 +34,12 @@ namespace Game.PlayerV2.States
 
         public override bool CanEnterState(StateContext context) => true;
 
+        // External control (mid-air climb grab, ragdoll, hookshot) must ALWAYS be able to take the
+        // body — blocking exit here kept the FSM stuck in Jump during an airborne takeover, so
+        // TickAir kept steering/rotating the root underneath the external system. The grounded
+        // guard only exists to stop premature LANDING transitions.
         public override bool CanExitState() =>
+            _context.Controller.IsExternalControlActive ||
             _context.IsGrounded || _context.TimeInState >= _maxAirTime;
 
         public override CharacterStateType CheckTransitions(StateContext context)

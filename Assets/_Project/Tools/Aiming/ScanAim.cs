@@ -25,12 +25,16 @@ public class ScanAim : AimModeBase
 
         if (animator)
         {
-            animator.CrossFade("ScanPose", 0.15f, layer: 2);
+            animator.CrossFade("ScanPose", 0.15f, animator.GetLayerIndex("AimingUpperBody"));
             animator.SetBool("IsScanning", true);
         }
 
         if (playerInput != null && playerInput.actions["Use"] != null)
+        {
+            // -= before += : idempotent even if EnterMode ever runs twice without an ExitMode.
+            playerInput.actions["Use"].performed -= HandleUse;
             playerInput.actions["Use"].performed += HandleUse;
+        }
     }
 
     public override void UpdateMode()
@@ -52,7 +56,7 @@ public class ScanAim : AimModeBase
         if (animator)
         {
             animator.CrossFade("Idle Walk Run Blend", 0.2f, 0);
-            animator.CrossFade("UpperBodyIdle", 0.2f, 2);
+            animator.CrossFade("UpperBodyIdle", 0.2f, animator.GetLayerIndex("AimingUpperBody"));
             animator.SetBool("IsScanning", false);
         }
 

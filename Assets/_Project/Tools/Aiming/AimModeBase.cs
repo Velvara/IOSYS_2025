@@ -99,7 +99,7 @@ public abstract class AimModeBase : MonoBehaviour, IAimMode
         if (animator)
         {
             animator.SetBool("IsAiming", false);
-            int upperBodyLayer = animator.GetLayerIndex("AimingUpperbody");
+            int upperBodyLayer = animator.GetLayerIndex("AimingUpperBody");   // exact layer name (case-sensitive)
             animator.CrossFade("UpperBodyIdle", 0.2f, upperBodyLayer);
         }
         var motor = PlayerMotor;

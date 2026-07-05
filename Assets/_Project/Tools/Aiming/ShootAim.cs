@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.Rendering.Universal;
 
 public class ShootAim : AimModeBase
 {
@@ -59,7 +58,7 @@ public class ShootAim : AimModeBase
             manager.RequestCameraTransition(camHeight, camDist, camSide);
 
         if (animator)
-            animator.CrossFade("ShootPose", 1f, layer: 2);
+            animator.CrossFade("ShootPose", 1f, animator.GetLayerIndex("AimingUpperBody"));
 
         heldHandler.SpawnHeldItem();
 
@@ -67,7 +66,11 @@ public class ShootAim : AimModeBase
         {
             var useAction = playerInput.actions["Use"];
             if (useAction != null)
+            {
+                // -= before += : idempotent even if EnterMode ever runs twice without an ExitMode.
+                useAction.performed -= HandleUse;
                 useAction.performed += HandleUse;
+            }
         }
 
         if (aimTargetInstance == null && aimTargetPrefab != null)
@@ -210,7 +213,7 @@ public class ShootAim : AimModeBase
         if (animator)
         {
             animator.CrossFade("Idle Walk Run Blend", 0.2f, 0);
-            animator.CrossFade("UpperBodyIdle", 0.2f, 2);
+            animator.CrossFade("UpperBodyIdle", 0.2f, animator.GetLayerIndex("AimingUpperBody"));
             animator.SetBool("IsShootingAiming", false);
         }
 
@@ -462,7 +465,7 @@ public class ShootAim : AimModeBase
         // Reset animator if necessary, but keep item alive!
         if (animator)
         {
-            animator.CrossFade("UpperBodyIdle", 0.2f, 2);
+            animator.CrossFade("UpperBodyIdle", 0.2f, animator.GetLayerIndex("AimingUpperBody"));
             animator.SetBool("IsShootingAiming", false);
         }
     }

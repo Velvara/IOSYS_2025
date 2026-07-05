@@ -14,13 +14,20 @@ namespace Game.Climbing
     /// → FSM enters ExternalControlState (locomotion relinquished, look frozen, locomotion animator
     /// zeroed); climbing then re-enables free-look and drives the transform + FinalIK directly.
     ///
-    /// SKELETON STAGE: only the entry/exit takeover handshake is wired (debug-key toggle). Grab
-    /// detection, hold selection, effector targeting, root offset, and the dynamics tick come next.
+    /// PARTIAL CLASS — one state machine split across files by subsystem (ALL fields live HERE, so
+    /// the inspector layout and serialized data are untouched):
+    ///   ClimbController.cs            lifecycle: fields, setup, input, Update, candidate scan, grab/release
+    ///   ClimbController.Traversal.cs  hand-over-hand stepping, brachiation, hold queries
+    ///   ClimbController.Feet.cs       animated-legs smear/lock + procedural foot stepping, knee bends
+    ///   ClimbController.BodyPose.cs   body orientation/position, pendulum, standoff, spine/head, grip offsets
+    ///   ClimbController.PeekJump.cs   BracedReady peek, jump-off, arc camera, trajectory preview
+    ///   ClimbController.Mantle.cs     reach-top mantle + get-up, reach-bottom step-off
+    ///
     /// Runs after PlayerController (DefaultExecutionOrder) so the free-look re-enable sticks the same
     /// frame the FSM freezes look on entry.
     /// </summary>
     [DefaultExecutionOrder(100)]
-    public class ClimbController : MonoBehaviour
+    public partial class ClimbController : MonoBehaviour
     {
         [Header("FinalIK")]
         [Tooltip("Full Body Biped IK on the player rig. Auto-found in children if left null.")]
@@ -78,6 +85,8 @@ namespace Game.Climbing
         [SerializeField] private float crossMargin = 0.12f;
         [Tooltip("Max distance between the two hands. When exceeded, the trailing hand closes the gap toward the other hand instead of reaching further; holds beyond this from the other hand are also rejected.")]
         [SerializeField] private float maxHandSeparation = 0.7f;
+        [Tooltip("After a traversal search finds NO reachable hold (stuck against a dead end), wait this long before searching again — avoids rescanning every hold every frame while the input stays held.")]
+        [SerializeField] private float traverseRetryInterval = 0.15f;
 
         [Header("Detection")]
         [Tooltip("Layers searched for climbable colliders.")]
@@ -92,6 +101,8 @@ namespace Game.Climbing
         [SerializeField] private float maxGrabAngle = 80f;
         [Tooltip("Min angle of the grab normal from world up — keeps floors/ceilings ungrabbable. 90 = vertical wall.")]
         [SerializeField] private float minWallAngle = 45f;
+        [Tooltip("How often (Hz) to scan for a grab candidate while free. The scan runs every frame while a buffered Use press or the post-jump catch window is live, so grab responsiveness is unaffected.")]
+        [SerializeField] private float candidateScanHz = 10f;
 
         [Header("Climb Pose (animator ClimbingLayer + ClimbLegsLayer)")]
         [Tooltip("How fast braced↔free-hang blends the leg-layer weight, foot-IK weight and standoff toward 0 in free hang. Roughly match your animator transition-clip length.")]
@@ -176,6 +187,10 @@ namespace Game.Climbing
         [SerializeField] private float sideToggleThreshold = 0.5f;
         [Tooltip("Orbit the middle point at the CHARACTER's height (flat arc). Off = orbit the raw trajectory-midpoint height (the arc dips at the far/90° point).")]
         [SerializeField] private bool orbitAtCharacterHeight = true;
+        [Tooltip("A/B TEST: on a side swap the camera sweeps an ELLIPTICAL curve whose crossing point is the predicted jump END pulled back toward the character (ellipseMidPullback, height-corrected) — instead of the circular orbit around the trajectory midpoint. Endpoints identical in both modes; the gaze hands off to the CHARACTER around the crossing and eases back onto the middle point toward either side. Safe to toggle live mid-peek.")]
+        [SerializeField] private bool cameraPathEllipse = false;
+        [Tooltip("Ellipse mode: how far (m) the curve's crossing point is pulled back from the predicted jump END toward the character — keeps the camera off the target climbable's surface.")]
+        [SerializeField] private float ellipseMidPullback = 1.5f;
         [Tooltip("Multiplier on the arc radius. The base radius is auto-derived as half the horizontal jump distance (so it grows with jump length); this scales it. 1 = as computed, >1 pulls the camera further out.")]
         [SerializeField] private float arcRadiusScale = 1f;
         [Tooltip("Final arc radius clamp in metres, applied after arcRadiusScale (x = min, y = max) — keeps the camera from getting too tight on short jumps or too far on long ones.")]
@@ -188,6 +203,10 @@ namespace Game.Climbing
         [SerializeField] private float arcSwapDuration = 0.3f;
         [Tooltip("Seconds to ease the camera from the held arc/jump pose back to free-look on exit, reattach, or landing.")]
         [SerializeField] private float camReattachRestoreTime = 0.3f;
+        [Tooltip("While airborne after a jump-off, once the character has FALLEN this many metres below the launch height the parked camera stops tracking and eases back to normal free-look (the ClimbJump pose hold itself continues until land / reattach / the ragdoll fall height).")]
+        [SerializeField] private float jumpCamFallRelease = 2f;
+        [Tooltip("Seconds the parked jump camera takes to TURN from the arc's look-at (the trajectory midpoint) onto the character when the jump starts — eases the snap on the Jump press.")]
+        [SerializeField] private float jumpCamTurnDuration = 0.5f;
 
         [Header("Climb Jump-Off (Jump from BracedReady)")]
         [Tooltip("Outward (away-from-wall) launch speed of the jump-off (decaying horizontal, blends to normal air control).")]
@@ -218,7 +237,7 @@ namespace Game.Climbing
         [SerializeField] private float useBufferTime = 0.2f;
         [Tooltip("Seconds after a jump-off during which air-control input is ignored, so the launch arc flies clean (no steering/bending). Set ~ the arc length you want uncontrolled.")]
         [SerializeField] private float climbJumpNoAirControlTime = 0.8f;
-        [Tooltip("While airborne after a jump-off, the ClimbJump pose + camera are held until the character lands, reattaches, or falls THIS many metres below the launch height (→ ragdoll later; for now just hands off to locomotion).")]
+        [Tooltip("While airborne after a jump-off, the ClimbJump pose + camera are held until the character lands, reattaches, or falls THIS many metres below the launch height (drops the hold back to locomotion). PlayerRagdoll's own hard-fall monitor ragdolls around the same point and ends the hold itself — keep the two heights in the same ballpark.")]
         [SerializeField] private float jumpRagdollFallHeight = 5f;
 
         [Header("Feet / Bracing (own tuning — legs reach further than arms)")]
@@ -371,11 +390,14 @@ namespace Game.Climbing
         [Tooltip("Allow toggling a climb takeover with the debug key — for verifying enter/exit only.")]
         [SerializeField] private bool enableDebugToggle = true;
         [SerializeField] private Key debugToggleKey = Key.C;
+        [Tooltip("Log climb lifecycle events (grab/release/mantle/jump) to the Console. Disable for shipping/profiling — each log allocates.")]
+        [SerializeField] private bool logClimbEvents = true;
 
         // -- Resolved player interfaces (runtime, never inspector-linked) --
         private IControlLock _controlLock;
         private IPlayerMotor _motor;
         private PlayerStamina _stamina;
+        private IRagdoll _ragdoll;   // hard-fall ragdoll — gates grabs + tears the climb down via RagdollStarting
         private PlayerCameraRig _cameraRig;
         private InputHandler _input;
         private PlayerInput _playerInput;   // for direct Use/Cancel/Jump action subscriptions (climb-specific)
@@ -391,6 +413,12 @@ namespace Game.Climbing
         private static readonly int _hFreeHang = Animator.StringToHash("FreeHang");
         private static readonly int _hClimbUp = Animator.StringToHash("ClimbUp");
         private static readonly int _hIsFreeHang = Animator.StringToHash("IsFreeHang");
+        // Base-layer locomotion flags — parked grounded at mantle end (see FinishMantle). A climb
+        // grabbed mid-air freezes these at their in-flight values for the whole climb (no motor
+        // ticks under external control), and the getup fade would reveal the stale FALLING pose.
+        private static readonly int _hBaseGrounded = Animator.StringToHash(Constants.ANIM_GROUNDED);
+        private static readonly int _hBaseJump = Animator.StringToHash(Constants.ANIM_JUMP);
+        private static readonly int _hBaseFreeFall = Animator.StringToHash(Constants.ANIM_FREE_FALL);
         private float _bracedWeight = 1f;   // 1 = braced (legs/foot-IK/standoff active), 0 = free hang
         private Vector3 _freeHangFacing;            // horizontal direction the body faces in free hang (turn target)
         private Quaternion _freeHangBodyRot = Quaternion.identity;   // eased free-hang body yaw (between hand-steps)
@@ -426,6 +454,14 @@ namespace Game.Climbing
         private Vector3 _candidatePos;
         private Quaternion _candidateRot;
         private ClimbableSurface _candidateSurface;
+        private readonly Collider[] _candidateHits = new Collider[16];   // non-alloc overlap buffer
+        private float _candidateScanTimer;
+
+        // -- Cached "no climbable hold above the hands" (AtSurfaceTop is O(all holds) — only recompute
+        //    when the hands actually change, i.e. when a step starts or settles) --
+        private bool _atTopCache;
+        private bool _atTopDirty = true;
+        private bool _wasAnyMoving;
 
         // -- Climb lifecycle --
         private bool _releasing;
@@ -458,9 +494,11 @@ namespace Game.Climbing
         private Vector3 _arcCenter;         // trajectory-midpoint (horizontal, y=0)
         private float _arcRadius, _arcInitialY, _arcFarY;
         private Vector3 _arcWallDir = Vector3.right, _arcJumpDir = Vector3.forward, _arcLookAt;
-        private bool _jumpCamHold;          // jump/airborne: hold the captured camera pose, following the character
-        private Vector3 _jumpCamOffset;
-        private Quaternion _jumpCamRot = Quaternion.identity;
+        private Vector3 _ellipseMid;        // ellipse mode: the swap curve's crossing point (jump end − pullback, height-corrected)
+        private bool _jumpCamHold;          // jump/airborne: camera parked at its arc spot, turning to track the character
+        private Vector3 _jumpCamPos;        // the parked world position (captured at BeginClimbJump)
+        private Quaternion _jumpCamFromRot = Quaternion.identity;   // rotation at the Jump press (arc look-at)
+        private float _jumpCamTurnT = 1f;   // 0→1 ease from the arc look-at onto the character
         private bool _reattachBlend;        // easing Camera.main back to free-look after exit/reattach
         private float _reattachT;
         private Vector3 _reattachFromPos;
@@ -508,6 +546,7 @@ namespace Game.Climbing
             _controlLock = GetComponentInParent<IControlLock>();
             _motor = GetComponentInParent<IPlayerMotor>();
             _stamina = GetComponentInParent<PlayerStamina>();
+            _ragdoll = GetComponentInParent<IRagdoll>();   // optional — climbing works without it
             _cameraRig = GetComponentInParent<PlayerCameraRig>();
             _input = GetComponentInParent<InputHandler>();
             _playerInput = GetComponentInParent<PlayerInput>();
@@ -551,6 +590,16 @@ namespace Game.Climbing
             if (ik != null) _rig = new EffectorRig(ik, effectorEase);
         }
 
+        // FBBIK is only needed while climbing: a full-body solve every idle frame costs CPU and its
+        // per-frame bone handling can poison animation-event bone reads (the thrown-projectile spawn
+        // bug — events fire before the animator writes the frame's pose). This runs AFTER FinalIK's
+        // own Start ([DefaultExecutionOrder(100)]), so the solver is already initiated; Grab()
+        // re-enables the component for the duration of a climb.
+        private void Start()
+        {
+            if (ik != null) ik.enabled = false;
+        }
+
         // Smear the feet onto the surface right BEFORE FinalIK solves, so we read the animator's posed
         // leg/foot positions (the animator runs before LateUpdate, the solver in LateUpdate).
         private void OnEnable()
@@ -580,6 +629,9 @@ namespace Game.Climbing
                 var jump = _playerInput.actions["Jump"];
                 if (jump != null) jump.performed += OnJumpInput;
             }
+
+            // A ragdoll (hard fall / external shove) takes the body — drop whatever climbing still holds.
+            if (_ragdoll != null) _ragdoll.RagdollStarting += OnRagdollStarting;
         }
 
         private void OnDisable()
@@ -604,6 +656,8 @@ namespace Game.Climbing
                 var jump = _playerInput.actions["Jump"];
                 if (jump != null) jump.performed -= OnJumpInput;
             }
+
+            if (_ragdoll != null) _ragdoll.RagdollStarting -= OnRagdollStarting;
         }
 
         /// <summary>Use: toggle BracedReady while braced-climbing (enter ↔ return), or grab a climbable when free.</summary>
@@ -613,12 +667,17 @@ namespace Game.Climbing
             {
                 if (_releasing || _mantling || _gettingUp || _climbJumping) return;
                 if (_mode == ClimbMode.BracedReady)
+                {
                     _readyReturning = !_readyReturning;     // toggle: peek ↔ return-to-climbing (responsive mid-ease)
+                    _pendingSwap = false;                   // a Use press aborts any in-flight side-swap intent
+                                                            // (else the camera would keep steering to the other side)
+                }
                 else if (!_freeHang)
                     EnterBracedReady();                     // braced → peek
                 return;
             }
             if (_input != null && _input.AimHeld) return;   // Use fires a tool while aiming — don't also grab
+            if (_ragdoll != null && _ragdoll.IsRagdolled) return;   // that press is the ragdoll recovery, not a grab
             _useBufferTimer = useBufferTime;                // buffered: Update grabs when a candidate is in reach (incl. mid-jump catch)
         }
 
@@ -644,9 +703,19 @@ namespace Game.Climbing
             // Post-jump airborne hold: motor flies the body; hold the ClimbJump pose + camera until land/catch/fall.
             if (_jumpAirborne) TickJumpAirborne(Time.deltaTime);
 
-            // Look for a grab candidate while free (suppressed after a mantle/drop, and during the post-jump turn).
-            if (!_isClimbing && _regrabCooldownTimer <= 0f && !_jumpReattachBlocked)
-                _hasCandidate = TryFindCandidate(out _candidatePos, out _candidateRot, out _candidateSurface);
+            // Look for a grab candidate while free (suppressed after a mantle/drop, and during the post-jump
+            // turn). Throttled to candidateScanHz — but scanned every frame while a buffered Use press or the
+            // airborne catch window is live, so grabs and mid-jump wall-catches stay frame-accurate.
+            if (!_isClimbing && _regrabCooldownTimer <= 0f && !_jumpReattachBlocked &&
+                (_ragdoll == null || !_ragdoll.IsRagdolled))
+            {
+                _candidateScanTimer -= Time.deltaTime;
+                if (_useBufferTimer > 0f || _jumpAirborne || _candidateScanTimer <= 0f)
+                {
+                    _hasCandidate = TryFindCandidate(out _candidatePos, out _candidateRot, out _candidateSurface);
+                    _candidateScanTimer = candidateScanHz > 0f ? 1f / candidateScanHz : 0f;
+                }
+            }
             else
                 _hasCandidate = false;
 
@@ -685,12 +754,14 @@ namespace Game.Climbing
             surface = null;
 
             Vector3 origin = transform.position + Vector3.up * detectHeightOffset;
-            Collider[] hits = Physics.OverlapSphere(origin, detectRadius, climbableLayers, QueryTriggerInteraction.Ignore);
+            int hitCount = Physics.OverlapSphereNonAlloc(origin, detectRadius, _candidateHits,
+                                                         climbableLayers, QueryTriggerInteraction.Ignore);
 
             float best = float.MaxValue;
-            for (int h = 0; h < hits.Length; h++)
+            for (int h = 0; h < hitCount; h++)
             {
-                ClimbableSurface s = hits[h].GetComponentInParent<ClimbableSurface>();
+                ClimbableSurface s = _candidateHits[h].GetComponentInParent<ClimbableSurface>();
+                _candidateHits[h] = null;   // don't pin dead colliders across scans
                 if (s == null || !s.HoldsReady) continue;
 
                 Transform st = s.transform;
@@ -737,8 +808,27 @@ namespace Game.Climbing
         {
             if (_isClimbing || _controlLock == null || _rig == null || _candidateSurface == null) return;
 
-            // Reattaching mid-jump: blend the camera back to free-look (over the new climb).
-            if (_cameraOverridden) RestoreBracedReadyCamera();
+            // The FBBIK solver sleeps while not climbing (perf + clean animation-event bone reads) — wake it.
+            if (ik != null && !ik.enabled)
+            {
+                if (!ik.solver.initiated) ik.GetIKSolver().Initiate(ik.transform);   // belt & braces (Start order covers this)
+                ik.enabled = true;
+            }
+
+            // Reattaching mid-jump: blend the camera back to free-look (over the new climb). Prime the
+            // free-look root to face INTO the new wall first, so the blend settles in the normal
+            // braced-hang framing (behind the climber) instead of wherever the jump viewpoint left it.
+            if (_cameraOverridden)
+            {
+                // Prime free-look to face INTO the new wall through the RIG's internal yaw/pitch —
+                // writing the target transform directly gets rewritten (unfrozen) or dragged by the
+                // instant body turn below before the unfreeze-resync reads it (frozen: on a mid-air
+                // grab ExternalControlState re-enters and freezes the rig), losing the prime.
+                Vector3 intoWall = Vector3.ProjectOnPlane(-(_candidateRot * Vector3.forward), Vector3.up);
+                if (_cameraRig != null && intoWall.sqrMagnitude > 1e-4f)
+                    _cameraRig.SetLookDirection(intoWall.normalized);
+                RestoreBracedReadyCamera();   // blends Camera.main back to the (primed) free-look
+            }
 
             Vector3 rightPos = _candidatePos;
             Quaternion rightRot = _candidateRot;
@@ -820,7 +910,9 @@ namespace Game.Climbing
 
             _rig.SetMasterWeight(0f);
             _masterWeightTarget = 1f;
-            Debug.Log($"[ClimbController] Grab on {_currentSurface.Source} surface ({_currentSurface.name}).");
+            _atTopDirty = true;
+            _wasAnyMoving = false;
+            if (logClimbEvents) Debug.Log($"[ClimbController] Grab on {_currentSurface.Source} surface ({_currentSurface.name}).");
         }
 
         private void BeginRelease()
@@ -832,7 +924,7 @@ namespace Game.Climbing
             // Hand back to gravity from REST — the motor froze _verticalVelocity at grab time (often a fast
             // fall value), so without this the drop resumes mid-fall instead of ramping like a ledge step-off.
             _motor?.SetVerticalVelocity(0f);
-            Debug.Log("[ClimbController] Release (fading out).");
+            if (logClimbEvents) Debug.Log("[ClimbController] Release (fading out).");
         }
 
         private void FinishRelease()
@@ -858,7 +950,26 @@ namespace Game.Climbing
             if (_animator != null && _climbLegsLayerIndex >= 0) _animator.SetLayerWeight(_climbLegsLayerIndex, 0f);
             _stamina?.SetClimbState(false, false);
             _controlLock?.ReleaseExternalControl();   // FSM hands control back to Jump/Move/Idle
-            Debug.Log("[ClimbController] Released — control returned.");
+            if (ik != null) ik.enabled = false;       // solver back to sleep until the next grab
+            if (logClimbEvents) Debug.Log("[ClimbController] Released — control returned.");
+        }
+
+        /// <summary>The player is about to ragdoll (hard fall or an external trigger): tear down whatever
+        /// climbing still holds — the post-jump pose/camera hold or the climb itself — so the physics
+        /// takeover starts from a clean body. Fired BEFORE PlayerRagdoll takes control, so the
+        /// FinishRelease here can still ReleaseExternalControl without stepping on the ragdoll's own
+        /// request.</summary>
+        private void OnRagdollStarting()
+        {
+            _useBufferTimer = 0f;                    // a buffered Use press must not grab out of the ragdoll
+            if (_jumpAirborne) EndJumpAirborne();    // drop the held ClimbJump pose + parked camera
+            if (_isClimbing)
+            {
+                _mantling = false;                   // FinishRelease doesn't clear the scripted-move flags
+                _gettingUp = false;
+                _rig?.SetMasterWeight(0f);
+                FinishRelease();                     // holds off, layers zeroed, control released, IK asleep
+            }
         }
 
         /// <summary>Per-frame climb update: free-look, IK weight fade, effector tick, body follow.</summary>
@@ -916,6 +1027,15 @@ namespace Game.Climbing
             StepPendulum(dt);
             UpdateBodyPose();
 
+            // The hands changed if a step started or settled this frame — refresh the cached
+            // "at the top" answer on those transitions only (it's an O(all holds) scan).
+            bool anyMoving = _rig.AnyMoving;
+            if (anyMoving != _wasAnyMoving)
+            {
+                _atTopDirty = true;
+                _wasAnyMoving = anyMoving;
+            }
+
             // Trigger the mantle only AFTER UpdateBodyPose has placed the body for the current hands —
             // capturing _mantleStart before this froze a stale, pre-hand-step position, so the body snapped
             // down ~rootDownOffset at the start of the move. Now _mantleStart matches the visible body.
@@ -928,1560 +1048,5 @@ namespace Game.Climbing
                 FinishRelease();
         }
 
-        /// <summary>Average outward normal of the two hand holds (away from the surface, climber's side).</summary>
-        private Vector3 AvgOutward()
-        {
-            Vector3 o = _rhOutward + _lhOutward;
-            return o.sqrMagnitude > 1e-4f ? o.normalized : _rhOutward;
-        }
-
-        /// <summary>True while climbing a procedural surface (a Flora trunk), where holds carry a trunk-axis up.</summary>
-        private bool IsTrunk =>
-            _currentSurface != null && _currentSurface.Source == ClimbableSurface.ClimbHoldSource.Procedural;
-
-        /// <summary>Average "up" of the two hand holds — the trunk axis toward the tip (used for trunk-aligned orientation).</summary>
-        private Vector3 TrunkUp()
-        {
-            Vector3 u = _rhUp + _lhUp;
-            return u.sqrMagnitude > 1e-4f ? u.normalized : Vector3.up;
-        }
-
-        /// <summary>
-        /// Positions and orients the body each frame. BRACED: face the surface (yaw only) via the per-step
-        /// rotation tween, and sit a standoff out from the surface below the hands. FREE HANG: yaw to the
-        /// turn-driven facing and hang straight down from the hand-midpoint. The two are blended by
-        /// <see cref="_bracedWeight"/>; rotation is snapped on grab (<paramref name="instant"/>).
-        /// </summary>
-        private void UpdateBodyPose(bool instant = false)
-        {
-            Vector3 avgOut = AvgOutward();
-
-            // ---- Rotation ----
-            // BRACED facing turns via a per-step TWEEN (set in StartBracedTurn on each hand step) from the
-            // current rotation to the new target over a traverse-speed-tied duration — so the body rotates
-            // smoothly ACROSS the hand move instead of snapping when avgOut jumps a ring-angle.
-            if (instant)
-            {
-                _bracedBodyRot = ComputeBracedTarget();   // snap on grab
-                _rotTweenT = 1f;
-            }
-            else if (_rotTweenT < 1f)
-            {
-                _rotTweenT = Mathf.Min(1f, _rotTweenT + Time.deltaTime / _rotTweenDur);
-                _bracedBodyRot = Quaternion.Slerp(_rotTweenFrom, _rotTweenTo, Mathf.SmoothStep(0f, 1f, _rotTweenT));
-            }
-            // else: tween settled — hold _bracedBodyRot until the next hand step.
-
-            // FREE-HANG target: yaw to the turn-driven facing, upright — the torso never pitches toward
-            // the hands. Eased between the discrete per-hand-step facing changes so the turn reads smooth.
-            Quaternion freeRot = _freeHangFacing.sqrMagnitude > 1e-4f
-                ? Quaternion.LookRotation(_freeHangFacing, Vector3.up)
-                : _bracedBodyRot;
-            _freeHangBodyRot = instant
-                ? freeRot
-                : Quaternion.Slerp(_freeHangBodyRot, freeRot, 1f - Mathf.Exp(-freeHangTurnSmooth * Time.deltaTime));
-
-            transform.rotation = Quaternion.Slerp(_freeHangBodyRot, _bracedBodyRot, _bracedWeight);
-
-            // BracedReady peek: yaw the WHOLE BODY toward the released side as a ROOT rotation (PRE-solve) so
-            // FBBIK keeps the gripping hand ON its world-space hold — a post-solve bone turn drags it off.
-            // Keep this angle modest (the arms must still reach the holds); the rest of the "look away from the
-            // wall" comes from the head turn (ApplyBracedReadyTurn).
-            if (_mode == ClimbMode.BracedReady && _readyT > 0.001f)
-            {
-                float sign = bracedReadyTurnInvert ? -_readySign : _readySign;
-                transform.rotation = Quaternion.AngleAxis(bracedReadyTorsoAngle * _readyT * sign, transform.up) * transform.rotation;
-            }
-
-            // ---- Position ----
-            // BRACED: rigid drop (restore-point) vs pendulum hang (lower mass swings below the moving hands).
-            // The standoff offset uses the SMOOTHED facing's outward (from the rotation tween), NOT the raw
-            // avgOut — avgOut jumps instantly when a hand grabs, which would pop the body ~rootForwardOffset·
-            // sin(step angle) sideways around the trunk each step (a snap the camera follows, independent of
-            // rotation/pendulum). Tying it to _bracedBodyRot makes the standoff follow the same smooth turn.
-            Vector3 facingOut = -(_bracedBodyRot * Vector3.forward);
-            Vector3 hangDir = (alignTorsoToTrunkAxis && IsTrunk) ? -TrunkUp() : Vector3.down;
-            Vector3 rigidPos = _rig.HandAverage + facingOut * rootForwardOffset + hangDir * rootDownOffset;
-            Vector3 bracedPos = usePendulum && _pendulum != null
-                ? Vector3.Lerp(rigidPos, _pendulum.LowerPos + facingOut * rootForwardOffset, pendulumWeight)
-                : rigidPos;
-
-            // FREE-HANG: hang straight DOWN from the hand-midpoint — independent of rootForwardOffset /
-            // rootDownOffset (body sits directly below the middle of the two hand holds). Sideways
-            // liveliness comes from the spine lean (TwistSpine), not a positional sway.
-            Vector3 freePos = _rig.HandAverage - Vector3.up * freeHangDrop;
-
-            transform.position = Vector3.Lerp(freePos, bracedPos, _bracedWeight);
-
-            // Torso standoff push — gated by `enableStandoff` and scaled by _bracedWeight (no push in free hang).
-            ApplyStandoff(avgOut, instant);
-        }
-
-        /// <summary>Sets the pendulum's tuning + segment lengths so its rest matches the rigid body drop.</summary>
-        private void ConfigurePendulum()
-        {
-            if (_pendulum == null) return;
-            _pendulum.Stiffness = pendulumStiffness;
-            _pendulum.Damping = pendulumDamping;
-            _pendulum.AnchorToUpper = _pendulum.UpperToLower = rootDownOffset * 0.5f;  // rest = rigid drop
-
-            // Hang along the TRUNK AXIS when braced on a bent trunk (so the body sits alongside a horizontal
-            // limb instead of dropping straight down through it); blend back to world-down in free hang
-            // (where real gravity should hang you below an overhang). Non-trunks: always world-down.
-            Vector3 trunkDown = (alignTorsoToTrunkAxis && IsTrunk) ? -TrunkUp() : Vector3.down;
-            _pendulum.GravityDir = Vector3.Slerp(Vector3.down, trunkDown, _bracedWeight);
-        }
-
-        /// <summary>Advances the body pendulum one step, anchored to the live hand-average.</summary>
-        private void StepPendulum(float dt)
-        {
-            if (!usePendulum || _pendulum == null || _pendulumFrozen) return;   // frozen at rest in BracedReady
-            ConfigurePendulum();                 // live-tunable
-            _pendulum.SetAnchor(_rig.HandAverage);
-
-            // Fixed-timestep sub-stepping so the swing is frame-rate independent + stable (better than a
-            // literal FixedUpdate, which would quantize the visual). Safety cap avoids a spiral of death.
-            float fixedStep = 1f / Mathf.Max(1f, pendulumStepHz);
-            _pendulumAccumulator += dt;
-            int safety = 0;
-            while (_pendulumAccumulator >= fixedStep && safety++ < 8)
-            {
-                _pendulum.Step(fixedStep);
-                _pendulumAccumulator -= fixedStep;
-            }
-        }
-
-        /// <summary>
-        /// Leans the chest/spine bone with the pendulum's upper-mass swing (article's mass2 → spine).
-        /// Runs as FinalIK's POST-solve callback so it overrides the final pose. The upper segment's
-        /// deviation from straight-down is applied to the spine as a world-space lean, scaled by weight
-        /// and the climb fade. At rest the swing is identity (no change).
-        /// </summary>
-        private void TwistSpine()
-        {
-            if (!_isClimbing || !usePendulum || _pendulum == null || spineBone == null || _rig == null) return;
-            float w = spineSwingWeight * _rig.MasterWeight;
-            if (w <= 0.001f) return;
-
-            // In FREE HANG the torso must not pitch toward the arms — keep only the LATERAL (sideways)
-            // part of the swing and drop the fore/aft component along the body's forward axis. Braced
-            // keeps the full swing. (_bracedWeight: 1 = braced/full, 0 = free/lateral-only.)
-            // Measure the swing from the pendulum's REST (hang) direction, not world-down — on a bent trunk
-            // the hang is along the trunk axis, so this keeps rest = identity (no bogus static spine lean).
-            Vector3 restDir = _pendulum.GravityDir.sqrMagnitude > 1e-6f ? _pendulum.GravityDir.normalized : Vector3.down;
-            Vector3 dir = _pendulum.UpperDir;
-            Vector3 lateral = Vector3.ProjectOnPlane(dir, transform.forward);
-            dir = lateral.sqrMagnitude > 1e-5f
-                ? Vector3.Slerp(lateral.normalized, dir, _bracedWeight)
-                : Vector3.Slerp(restDir, dir, _bracedWeight);   // pure fore/aft swing → rest (hang) dir in free hang
-
-            Quaternion swing = Quaternion.FromToRotation(restDir, dir);
-
-            if (spineBoneLower != null)
-            {
-                // Spread the lean across two joints for a smoother bend. Apply the lower bone FIRST — the
-                // chest inherits it, so the two partial leans compose to ~the full swing, distributed.
-                spineBoneLower.rotation = Quaternion.Slerp(Quaternion.identity, swing, w * spineLowerShare) * spineBoneLower.rotation;
-                spineBone.rotation = Quaternion.Slerp(Quaternion.identity, swing, w * (1f - spineLowerShare)) * spineBone.rotation;
-            }
-            else
-            {
-                spineBone.rotation = Quaternion.Slerp(Quaternion.identity, swing, w) * spineBone.rotation;
-            }
-        }
-
-        /// <summary>
-        /// Turns the head toward a look point, applied AFTER the solve + spine twist (final override). While
-        /// a hand is reaching, the point sits between the hand-midpoint and the LEAD (moving) hand, so the
-        /// character glances toward the hold it's going for; when idle it sits between the hand-midpoint and
-        /// the head's own default (animation) forward, so the head eases back to its neutral pose. Uses the
-        /// head's CURRENT forward (no rig-axis guess beyond <see cref="headForwardAxis"/>) so the turn is a
-        /// minimal rotation, scaled by weight × climb fade.
-        /// </summary>
-        private void HeadLook()
-        {
-            if (!_isClimbing || headBone == null || _rig == null) return;
-            // Fade the look-at out as the BracedReady peek turns in (ApplyBracedReadyTurn owns the head then).
-            float readyFade = _mode == ClimbMode.BracedReady ? (1f - _readyT) : 1f;
-            float w = headLookWeight * _rig.MasterWeight * readyFade;
-            if (w <= 0.001f) return;
-
-            Vector3 headPos = headBone.position;
-            Vector3 forward = headBone.rotation * (headForwardAxis.sqrMagnitude > 1e-6f ? headForwardAxis.normalized : Vector3.forward);
-            Vector3 handMid = _rig.HandAverage;
-
-            bool rMoving = _rig.IsMoving(ClimbEffector.RightHand);
-            bool lMoving = _rig.IsMoving(ClimbEffector.LeftHand);
-            Vector3 desiredPoint;
-            if (rMoving || lMoving)
-            {
-                Vector3 lead = _rig.GetCurrentPosition(rMoving ? ClimbEffector.RightHand : ClimbEffector.LeftHand);
-                desiredPoint = headLookTarget == HeadLookTarget.MovingHand
-                    ? lead                                                  // look straight at the moving hand
-                    : Vector3.Lerp(handMid, lead, headLookLeadBias);        // between mid and the reaching hand
-            }
-            else
-            {
-                desiredPoint = headLookTarget == HeadLookTarget.MovingHand
-                    ? headPos + forward                                     // animation default (neutral)
-                    : Vector3.Lerp(handMid, headPos + forward, headLookAheadBias);   // between mid and the default forward
-            }
-
-            // Ease the look POINT toward its target — smooths the jump when the lead hand switches or the
-            // head returns to neutral, instead of snapping the gaze.
-            if (!_headLookInit) { _headLookPoint = desiredPoint; _headLookInit = true; }
-            else _headLookPoint = Vector3.Lerp(_headLookPoint, desiredPoint, 1f - Mathf.Exp(-headLookSmooth * Time.deltaTime));
-
-            Vector3 desired = _headLookPoint - headPos;
-            if (desired.sqrMagnitude < 1e-6f) return;
-            Quaternion delta = Quaternion.FromToRotation(forward, desired.normalized);
-            headBone.rotation = Quaternion.Slerp(Quaternion.identity, delta, w) * headBone.rotation;
-        }
-
-        /// <summary>
-        /// Forward-probes the surface from the torso and pushes the whole body OUT along the normal when
-        /// the trunk is closer than <see cref="desiredStandoff"/> (or the torso is already inside it) —
-        /// so the body never clips a bulging/irregular surface. Hands and feet are world-pinned IK
-        /// effectors, so they stay on their holds while the torso clears; the push is clamped and eased.
-        /// The cast origin is backed out along the normal so it starts OUTSIDE the geometry even when the
-        /// torso is penetrating.
-        /// </summary>
-        private void ApplyStandoff(Vector3 bodyNormal, bool instant)
-        {
-            float push = 0f;
-            if (enableStandoff)
-            {
-                float chestPush = ProbePush(bodyNormal, chestProbeHeight, chestStandoff);
-                float hipPush = ProbePush(bodyNormal, hipProbeHeight, hipStandoff);
-                // Pure translation can only satisfy one distance — honour whichever needs the most
-                // clearance so neither the chest nor the hips clip. (Holding DIFFERENT chest/hip gaps at
-                // once needs the lean back on; the two probes can later drive that tilt from their delta.)
-                push = Mathf.Max(chestPush, hipPush);
-            }
-            push *= _bracedWeight;   // no torso standoff in free hang
-
-            float t = instant ? 1f : 1f - Mathf.Exp(-standoffSpeed * Time.deltaTime);
-            _standoffPush = Mathf.Lerp(_standoffPush, push, t);
-            transform.position += bodyNormal * _standoffPush;
-        }
-
-        /// <summary>
-        /// Forward SphereCast at one torso height; returns the outward push needed to hold its standoff
-        /// (0 if already clear). Origin is backed out along the normal so it starts outside the geometry
-        /// even when that point is penetrating.
-        /// </summary>
-        private float ProbePush(Vector3 bodyNormal, float height, float standoff)
-        {
-            Vector3 p = transform.position + Vector3.up * height;
-            Vector3 origin = p + bodyNormal * standoffBackup;
-            if (Physics.SphereCast(origin, standoffRadius, -bodyNormal, out RaycastHit hit,
-                                   standoffBackup + maxStandoffPush, climbableLayers, QueryTriggerInteraction.Ignore))
-            {
-                float surfaceDist = hit.distance - standoffBackup;   // point → surface (negative = penetrating)
-                return Mathf.Clamp(standoff - surfaceDist, 0f, maxStandoffPush);
-            }
-            return 0f;
-        }
-
-        /// <summary>
-        /// The braced facing rotation, sampled once per hand step (the tween target). Normally upright
-        /// (yaw only) facing the flattened into-surface direction. On a TRUNK (when alignTorsoToTrunkAxis),
-        /// the torso's vertical is aligned to the trunk axis instead, so "up" heads toward the tip however
-        /// the trunk bends.
-        /// </summary>
-        private Quaternion ComputeBracedTarget()
-        {
-            Vector3 avgOut = AvgOutward();
-
-            if (alignTorsoToTrunkAxis && IsTrunk)
-            {
-                Vector3 up = TrunkUp();
-                Vector3 into = Vector3.ProjectOnPlane(-avgOut, up);   // face the trunk, around its axis
-                if (into.sqrMagnitude > 1e-4f)
-                    return Quaternion.LookRotation(into.normalized, up);
-            }
-
-            Vector3 intoFlat = Vector3.ProjectOnPlane(-avgOut, Vector3.up);
-            return intoFlat.sqrMagnitude > 1e-4f
-                ? Quaternion.LookRotation(intoFlat.normalized, Vector3.up)
-                : _bracedBodyRot;
-        }
-
-        /// <summary>
-        /// Starts a braced body-rotation tween from the current facing to the new target, over a duration
-        /// tied to the hand-move time (traverseMoveDuration × bodyTurnDurationScale). Called on each
-        /// successful braced hand step, so the body turns smoothly across the move and slower traversal
-        /// produces gentler turns. Chains naturally if a step starts before the previous tween finishes.
-        /// </summary>
-        private void StartBracedTurn()
-        {
-            _rotTweenFrom = _bracedBodyRot;
-            _rotTweenTo = ComputeBracedTarget();
-            _rotTweenDur = Mathf.Max(0.0001f, traverseMoveDuration * bodyTurnDurationScale);
-            _rotTweenT = 0f;
-        }
-
-        /// <summary>
-        /// Picks the braced vs free-hang pose from surface orientation. A single scalar —
-        /// Dot(outwardNormal, up) — captures it: ≈0 = vertical wall (braced), strongly negative =
-        /// overhang above you / chest faces up (free hang). Hysteresis (enter vs exit thresholds)
-        /// stops braced↔free flicker at the boundary; the cross-fade smooths the switch so the body
-        /// doesn't pop. (Strongly POSITIVE = lying on a near-flat top = the future mantle zone — left
-        /// braced for now until mantle exists.)
-        /// </summary>
-        private void UpdatePoseSwitch()
-        {
-            float d = Vector3.Dot(AvgOutward(), Vector3.up);
-            if (!_freeHang && d < freeHangEnterDot) PlayPose(true, instant: false);
-            else if (_freeHang && d > freeHangExitDot) PlayPose(false, instant: false);
-        }
-
-        /// <summary>Switches the ClimbingLayer to the braced or free-hang state (snap on entry, cross-fade otherwise).</summary>
-        private void PlayPose(bool free, bool instant)
-        {
-            _freeHang = free;
-            if (free)
-            {
-                _lFootLocked = _rFootLocked = false;   // drop foot locks when entering free hang
-                // Seed the free-hang facing from the current body yaw so the brace→free switch doesn't snap.
-                Vector3 fwd = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
-                if (fwd.sqrMagnitude > 1e-4f) _freeHangFacing = fwd.normalized;
-            }
-            if (_animator == null) return;
-
-            // The animator plays the braced↔hang TRANSITION clips off this bool. Code only toggles intent.
-            _animator.SetBool(_hIsFreeHang, free);
-            if (instant)
-            {
-                _bracedWeight = free ? 0f : 1f;
-                if (_climbLayerIndex >= 0)
-                    _animator.Play(free ? _hFreeHang : _hClimbHang, _climbLayerIndex, 0f);
-            }
-        }
-
-        /// <summary>Cancel while braced: release the LOWEST hand (visual only — body pose keeps using BOTH holds),
-        /// turn the upper torso/head toward it (gaze ~away from the wall), freeze the pendulum. Movement locks
-        /// until Use (return) / Cancel (exit) / Jump (later increment).</summary>
-        private void EnterBracedReady()
-        {
-            // Capture the wall-perpendicular launch direction NOW, while squared (before the peek turn) — the
-            // cast is clean here, and the saved value is reused by the jump-off AND the trajectory line.
-            _bracedReadyJumpDir = ComputeWallOutward();
-
-            // Side = inverse of the camera look direction (dev preference): looking toward body-right → peek
-            // LEFT (release left hand); looking left or straight → peek RIGHT.
-            Vector3 lookFwd = _cam != null ? _cam.forward : transform.forward;
-            bool releaseLeft = Vector3.Dot(lookFwd, transform.right) > 0f;
-            _readySign = releaseLeft ? +1 : -1;
-            _mode = ClimbMode.BracedReady;
-            _readyReturning = false;
-            _pendingSwap = false;
-            _pendulumFrozen = true;
-            _pendulum?.Reset(_rig.HandAverage);   // settle the pendulum so the body holds still
-            SnapshotBracedReadyCamera();          // compute the arc + freeze the rig + engage the arc camera
-            Debug.Log($"[ClimbController] BracedReady — releasing {(releaseLeft ? "LEFT" : "RIGHT")} hand.");
-        }
-
-        /// <summary>BracedReady per-frame: ease the turn in/out, fade the released hand's IK pin, keep feet planted.</summary>
-        private void TickBracedReady(float dt)
-        {
-            // Side-swap: once the peek is settled, pushing look PAST the opposite-side threshold un-turns this
-            // side then re-peeks the other (latched; ignored mid-transition so a turn can't be interrupted). The
-            // camera arc angle follows _readySign automatically (sweeps 0↔180 through 90).
-            if (!_readyReturning && _readyT >= 0.999f && _input != null)
-            {
-                float lx = _input.LookInput.x;
-                bool swap = (_readySign > 0 && lx > sideToggleThreshold) || (_readySign < 0 && lx < -sideToggleThreshold);
-                if (swap) { _readyReturning = true; _pendingSwap = true; }
-            }
-
-            float target = _readyReturning ? 0f : 1f;
-            _readyT = Mathf.MoveTowards(_readyT, target, dt / Mathf.Max(0.0001f, bracedReadyTurnDuration));
-
-            // The loosened hand stays IK-driven but eases to an AUTHORED offset from its hold (composed on top
-            // of the per-hand grip offset), so you control exactly where the let-go hand sits. HandAverage
-            // still reads the un-offset effector targets, so the body pose is unaffected.
-            ClimbEffector released = _readySign > 0 ? ClimbEffector.LeftHand : ClimbEffector.RightHand;
-            bool isRight = released == ClimbEffector.RightHand;
-            // Chiral: the loosened offset + rotation are authored for the LEFT hand; mirror them for the right.
-            Vector3 looseOff = isRight ? Vector3.Scale(loosenedHandOffset, loosenedHandOffsetMirror) : loosenedHandOffset;
-            Vector3 looseRotEuler = isRight ? Vector3.Scale(loosenedHandRotation, loosenedHandRotationMirror) : loosenedHandRotation;
-            Vector3 gripRotEuler = isRight ? rightHandGripRotation : leftHandGripRotation;
-            Quaternion loosenedRot = Quaternion.Slerp(Quaternion.identity, Quaternion.Euler(looseRotEuler), _readyT);
-            Quaternion rotOff = Quaternion.Euler(gripRotEuler) * loosenedRot;
-
-            if (loosenedHandAnchorHead && headBone != null)
-            {
-                // Position relative to the HEAD bone (loosenedHandOffset = head-local point), eased from the
-                // on-hold pose. WriteEffector does holdPos + finalRot·posOffset, so feed the offset that lands
-                // the hand on the head target — keeps HandAverage/cleanup on the same channel. (handHoldOffset
-                // un-applied here; the loosened hand is leaving the hold anyway.)
-                Quaternion finalRot = _rig.GetCurrentRotation(released) * rotOff;
-                Vector3 holdPos = _rig.GetCurrentPosition(released);
-                Vector3 onHold = holdPos + finalRot * handHoldOffset;
-                Vector3 headTarget = headBone.TransformPoint(looseOff);
-                Vector3 worldTarget = Vector3.Lerp(onHold, headTarget, _readyT);
-                _rig.SetPositionOffset(released, Quaternion.Inverse(finalRot) * (worldTarget - holdPos));
-            }
-            else
-            {
-                // Hold-relative (default): offset in the grip frame, decoupled from the wrist twist via
-                // Inverse(loosened)·offset so re-angling the wrist twists in place without sliding the hand.
-                Vector3 baseOffset = handHoldOffset + looseOff * _readyT;
-                _rig.SetPositionOffset(released, Quaternion.Inverse(loosenedRot) * baseOffset);
-            }
-            _rig.SetRotationOffset(released, rotOff);
-
-            DriveBracedReadyCamera();   // root yaw + shoulder + side, lerped by _readyT toward the current side
-            UpdateFeet(dt);             // feet stay planted; legs idle via the legs-only-when-moving logic
-
-            if (_readyReturning && _readyT <= 0f)
-            {
-                if (_pendingSwap)
-                {
-                    _readySign = -_readySign;    // squared → flip to the other side, then ease back up
-                    _pendingSwap = false;
-                    _readyReturning = false;
-                }
-                else
-                {
-                    RestoreBracedReadyCamera();  // square + unfreeze the rig (resyncs from the now-squared root)
-                    _mode = ClimbMode.Climbing;
-                    _readyReturning = false;
-                    _pendulumFrozen = false;
-                }
-            }
-        }
-
-        /// <summary>Engage the jump-arc orbit camera: compute the arc from the current jump trajectory, freeze
-        /// PlayerCameraRig, and start blending the camera onto the arc (applied in the after-brain event).</summary>
-        private void SnapshotBracedReadyCamera()
-        {
-            if (_cam == null && Camera.main != null) _cam = Camera.main.transform;   // safety re-resolve
-            ComputeArc();
-            _arcActive = true;
-            _arcBlend = 0f;
-            _arcAngle = _readySign >= 0 ? 0f : 180f;   // start at the entry side's arc end
-            _jumpCamHold = false;
-            _reattachBlend = false;
-            _cameraOverridden = true;
-            _cameraRig?.SetFrozen(true);
-        }
-
-        /// <summary>Per-frame arc STATE update (the after-brain event does the actual camera move): sweep the angle toward the
-        /// current side's end (0 or 180, through 90 on a swap) and ease the blend in — out when returning to climb.</summary>
-        private void DriveBracedReadyCamera()
-        {
-            if (!_arcActive) return;
-            float target = _readySign >= 0 ? 0f : 180f;
-            _arcAngle = Mathf.MoveTowards(_arcAngle, target, (180f / Mathf.Max(0.0001f, arcSwapDuration)) * Time.deltaTime);
-            bool returningToClimb = _readyReturning && !_pendingSwap;
-            _arcBlend = Mathf.MoveTowards(_arcBlend, returningToClimb ? 0f : 1f, Time.deltaTime / Mathf.Max(0.0001f, arcBlendDuration));
-        }
-
-        /// <summary>Hand the camera back: capture Camera.main's current pose, unfreeze the rig, and blend the camera
-        /// back to free-look over camReattachRestoreTime (after-brain event). Used for Use-return, exit, and mid-jump reattach.</summary>
-        private void RestoreBracedReadyCamera()
-        {
-            if (!_cameraOverridden) return;
-            if (_cam != null) { _reattachFromPos = _cam.position; _reattachFromRot = _cam.rotation; }
-            _reattachBlend = true;
-            _reattachT = 0f;
-            _arcActive = false;
-            _jumpCamHold = false;
-            _cameraOverridden = false;
-            _cameraRig?.SetFrozen(false);   // free-look resumes; the after-brain event blends the camera to it
-        }
-
-        /// <summary>Computes the jump-arc: center = midpoint of the wall-hit (initial) and the trajectory end;
-        /// radius = half the horizontal distance (× arcRadiusScale, clamped); axes = jump dir (90°) + wall tangent
-        /// (0°/180°). Far/90° height dips to the raw midpoint unless orbitAtCharacterHeight; arcHeightOffset raises
-        /// the camera (look-at stays on the middle point).</summary>
-        private void ComputeArc()
-        {
-            Vector3 initial = _bracedReadyJumpHit;
-            int count = FillTrajectory();
-            Vector3 end = count > 0 ? _trajPoints[count - 1] : initial + _bracedReadyJumpDir * 3f;
-            Vector3 mid = (initial + end) * 0.5f;
-            float baseInitialY = initial.y;
-            float baseFarY = orbitAtCharacterHeight ? initial.y : mid.y;
-            _arcInitialY = baseInitialY + arcHeightOffset;
-            _arcFarY = baseFarY + arcHeightOffset;
-            _arcCenter = new Vector3(mid.x, 0f, mid.z);
-            float baseRadius = Vector3.Distance(new Vector3(initial.x, 0f, initial.z), new Vector3(end.x, 0f, end.z)) * 0.5f;
-            _arcRadius = Mathf.Clamp(baseRadius * arcRadiusScale, arcRadiusClamp.x, arcRadiusClamp.y);
-            _arcJumpDir = _bracedReadyJumpDir;
-            _arcWallDir = Vector3.Cross(Vector3.up, _arcJumpDir).normalized;
-            _arcLookAt = new Vector3(mid.x, baseFarY, mid.z);
-        }
-
-        /// <summary>Camera position on the arc at angle a (deg): 0/180 = ±wall tangent (initial height), 90 = jump
-        /// dir (far height). Horizontal circle of radius R around the trajectory midpoint.</summary>
-        private Vector3 ArcCameraPos(float aDeg)
-        {
-            float a = aDeg * Mathf.Deg2Rad;
-            Vector3 h = _arcCenter + _arcRadius * (Mathf.Cos(a) * _arcWallDir + Mathf.Sin(a) * _arcJumpDir);
-            return new Vector3(h.x, Mathf.Lerp(_arcInitialY, _arcFarY, Mathf.Sin(a)), h.z);
-        }
-
-        /// <summary>Applies the climb camera override to the brain's output camera, fired from
-        /// CinemachineCore.CameraUpdatedEvent so it runs AFTER the brain writes the transform (a LateUpdate write
-        /// would be re-damped back toward free-look). Drives the peek arc (blended), the jump-hold (follow the
-        /// character), or the reattach/exit blend back to free-look.</summary>
-        private void OnCameraUpdated(CinemachineBrain brain)
-        {
-            if (_cam == null && Camera.main != null) { _mainCam = Camera.main; _cam = _mainCam.transform; }
-            if (_cam == null) return;
-            if (brain == null || brain.OutputCamera != _mainCam) return;   // only the camera we own
-            if (_arcActive)
-            {
-                Vector3 arcPos = ArcCameraPos(_arcAngle);
-                Vector3 toC = _arcLookAt - arcPos;
-                Quaternion arcRot = toC.sqrMagnitude > 1e-6f ? Quaternion.LookRotation(toC.normalized, Vector3.up) : _cam.rotation;
-                _cam.SetPositionAndRotation(Vector3.Lerp(_cam.position, arcPos, _arcBlend),
-                                            Quaternion.Slerp(_cam.rotation, arcRot, _arcBlend));
-            }
-            else if (_jumpCamHold)
-            {
-                _cam.SetPositionAndRotation(transform.position + _jumpCamOffset, _jumpCamRot);
-            }
-            else if (_reattachBlend)
-            {
-                _reattachT = Mathf.Min(1f, _reattachT + Time.deltaTime / Mathf.Max(0.0001f, camReattachRestoreTime));
-                float t = Mathf.SmoothStep(0f, 1f, _reattachT);
-                _cam.SetPositionAndRotation(Vector3.Lerp(_reattachFromPos, _cam.position, t),
-                                            Quaternion.Slerp(_reattachFromRot, _cam.rotation, t));
-                if (_reattachT >= 1f) _reattachBlend = false;
-            }
-        }
-
-        /// <summary>Fills _trajPoints with the predicted jump arc (motor integration), truncated at the first
-        /// collision; returns the point count (endpoint = _trajPoints[count-1]).</summary>
-        private int FillTrajectory()
-        {
-            if (_motor == null) return 0;
-            int n = Mathf.Max(2, trajectoryPoints);
-            if (_trajPoints == null || _trajPoints.Length != n) _trajPoints = new Vector3[n];
-            Vector3 start = transform.position + Vector3.up * detectHeightOffset;   // ~chest launch origin
-            _motor.PredictLaunchArc(start, _bracedReadyJumpDir * climbJumpOutward, climbJumpDecay, climbJumpUp,
-                                    trajectoryTimeStep, _trajPoints);
-            int count = _trajPoints.Length;
-            for (int i = 1; i < _trajPoints.Length; i++)
-                if (Physics.Linecast(_trajPoints[i - 1], _trajPoints[i], out RaycastHit hit,
-                                     trajectoryCollisionMask, QueryTriggerInteraction.Ignore))
-                { _trajPoints[i] = hit.point; count = i + 1; break; }
-            return count;
-        }
-
-        /// <summary>Draws the predicted jump arc into the LineRenderer (matches the real jump via the motor sim).</summary>
-        private void UpdateTrajectory()
-        {
-            if (peekTrajectoryLine == null) return;
-            int count = FillTrajectory();
-            if (count < 1) { HideTrajectory(); return; }
-            peekTrajectoryLine.positionCount = count;
-            for (int i = 0; i < count; i++) peekTrajectoryLine.SetPosition(i, _trajPoints[i]);
-            if (!peekTrajectoryLine.enabled) peekTrajectoryLine.enabled = true;
-        }
-
-        private void HideTrajectory()
-        {
-            if (peekTrajectoryLine != null && peekTrajectoryLine.enabled) peekTrajectoryLine.enabled = false;
-        }
-
-        /// <summary>The flattened, wall-PERPENDICULAR "straight back" direction: raycast the chest into the wall
-        /// (along −AvgOutward) and use the real surface normal — independent of hold-normal asymmetry. Falls back
-        /// to the hold-normal average on a miss. Captured squared at BracedReady enter so the peek turn can't
-        /// incline it; reused by the jump-off and the trajectory line.</summary>
-        private Vector3 ComputeWallOutward()
-        {
-            Vector3 outward = Vector3.ProjectOnPlane(AvgOutward(), Vector3.up);
-            outward = outward.sqrMagnitude > 1e-4f
-                ? outward.normalized
-                : Vector3.ProjectOnPlane(-transform.forward, Vector3.up).normalized;
-            Vector3 chest = transform.position + Vector3.up * detectHeightOffset;
-            if (Physics.Raycast(chest, -outward, out RaycastHit wallHit, maxReach, climbableLayers, QueryTriggerInteraction.Ignore))
-            {
-                Vector3 n = Vector3.ProjectOnPlane(wallHit.normal, Vector3.up);
-                if (n.sqrMagnitude > 1e-4f) outward = n.normalized;
-                _bracedReadyJumpHit = wallHit.point;   // arc "initial point"
-            }
-            else _bracedReadyJumpHit = chest;          // fallback
-            return outward;
-        }
-
-        /// <summary>Jump from BracedReady: wind-up (square up + ClimbJump clip, hands still IK-pinned) until the
-        /// clip's "leave wall" animation event (OnClimbJumpLeaveWall) — or the safety timeout — fires the launch.</summary>
-        private void BeginClimbJump()
-        {
-            _climbJumping = true;
-            _jumpTimer = 0f;
-            _pendingSwap = false;
-            _readyReturning = false;
-            // Use the wall-perpendicular direction captured (squared, pre-turn) at BracedReady enter — so the
-            // body's peek turn never inclines the launch. Recompute only if it's somehow unset.
-            _jumpOutwardDir = _bracedReadyJumpDir.sqrMagnitude > 1e-4f ? _bracedReadyJumpDir : ComputeWallOutward();
-            // Freeze the current camera pose (from the arc) and hold it following the character through the jump.
-            if (_cam != null) { _jumpCamOffset = _cam.position - transform.position; _jumpCamRot = _cam.rotation; }
-            _arcActive = false;
-            _jumpCamHold = true;
-            if (_animator != null && _climbLayerIndex >= 0)
-            {
-                if (_animator.HasState(_climbLayerIndex, _hClimbJump))
-                    _animator.CrossFade(_hClimbJump, 0.1f, _climbLayerIndex, 0f);
-                else
-                    Debug.LogWarning("[ClimbController] No 'ClimbJump' state on ClimbingLayer — jump uses the timed fallback only.");
-            }
-            Debug.Log("[ClimbController] Climb jump-off — wind-up.");
-        }
-
-        /// <summary>Jump wind-up: square the body + camera back up (peek → neutral) while the ClimbJump clip plays
-        /// and the hands stay pinned. The launch fires from OnClimbJumpLeaveWall (or the safety timeout).</summary>
-        private void TickClimbJump(float dt)
-        {
-            _jumpTimer += dt;
-            _readyT = Mathf.MoveTowards(_readyT, 0f, dt / Mathf.Max(0.0001f, bracedReadyTurnDuration));  // square the body up
-            // Camera is held (following the character) by the _jumpCamHold branch in LateUpdate.
-            UpdateFeet(dt);
-            if (_jumpTimer >= climbJumpSafetyTimeout) FinishClimbJump();
-        }
-
-        /// <summary>Animation event on the ClimbJump clip — the frame the character leaves the wall.</summary>
-        public void OnClimbJumpLeaveWall()
-        {
-            if (_climbJumping) FinishClimbJump();
-        }
-
-        /// <summary>Leaves the wall: apply the launch, hand control to the motor (airborne), and enter the airborne
-        /// HOLD — the ClimbJump last frame + the camera viewpoint stay held until the character lands, reattaches,
-        /// or falls past jumpRagdollFallHeight. Re-grab is blocked until the post-jump 180° turn completes.</summary>
-        private void FinishClimbJump()
-        {
-            _climbJumping = false;
-            _jumpStartY = transform.position.y;
-            _motor?.AddLaunchVelocity(_jumpOutwardDir * climbJumpOutward, climbJumpDecay);
-            _motor?.SetVerticalVelocity(climbJumpUp);
-            _motor?.SuppressAirControl(climbJumpNoAirControlTime);   // clean arc — no input steering/bending
-            _controlLock?.ReleaseExternalControl();   // motor flies the body from here (airborne)
-            _isClimbing = false;       // motor drives + grab/catch detection re-enables; the hold runs in Update
-            _jumpAirborne = true;      // hold ClimbJump's last frame + camera until land / catch / fall
-            _stamina?.SetClimbState(false, false);
-            // Turn 180° to face the jump direction over jumpTurnDuration; reattach is blocked until it completes.
-            _jumpTurnFrom = transform.rotation;
-            _jumpTurnTo = _jumpOutwardDir.sqrMagnitude > 1e-4f
-                ? Quaternion.LookRotation(_jumpOutwardDir, Vector3.up)
-                : transform.rotation;
-            _jumpTurnT = 0f;
-            _jumpReattachBlocked = true;
-            Debug.Log("[ClimbController] Climb jump-off — launched (airborne hold).");
-        }
-
-        /// <summary>Airborne hold (motor flies the body): fade the FBBIK out (hands lerp off the holds onto the clip)
-        /// but keep the climb layer FULL so the ClimbJump pose (held last frame) shows — not the locomotion fall —
-        /// and hold the camera viewpoint. Ends on land, or a fall past jumpRagdollFallHeight (→ ragdoll later).
-        /// Reattaching is the separate buffered-Use grab path (Update), which resets this hold.</summary>
-        private void TickJumpAirborne(float dt)
-        {
-            // Turn the body 180° to face the jump direction (cosmetic — the launch is world-space). Air control
-            // is suppressed during this, so the motor won't fight the rotation. Unblocks reattach when done.
-            if (_jumpTurnT < 1f)
-            {
-                _jumpTurnT = Mathf.Min(1f, _jumpTurnT + dt / Mathf.Max(0.0001f, jumpTurnDuration));
-                transform.rotation = Quaternion.Slerp(_jumpTurnFrom, _jumpTurnTo, Mathf.SmoothStep(0f, 1f, _jumpTurnT));
-                if (_jumpTurnT >= 1f) _jumpReattachBlocked = false;
-            }
-
-            if (_rig != null)
-            {
-                _rig.SetMasterWeight(Mathf.MoveTowards(_rig.MasterWeight, 0f, climbJumpIkFade > 0f ? dt / climbJumpIkFade : 1f));
-                _rig.Tick(dt);
-            }
-            if (_animator != null && _climbLayerIndex >= 0) _animator.SetLayerWeight(_climbLayerIndex, 1f);
-            // Camera held (following the character) by the _jumpCamHold branch in LateUpdate.
-
-            CharacterController cc = _motor?.Controller;
-            // Land only once descending, so the launch frame's stale isGrounded doesn't end the hold instantly.
-            bool landed = cc != null && cc.isGrounded && _motor.VerticalVelocity <= 0f;
-            bool fellTooFar = (_jumpStartY - transform.position.y) > jumpRagdollFallHeight;
-            if (landed || fellTooFar)
-            {
-                // CLIMBING_HOOK: if (fellTooFar) start ragdoll-fall here (future increment).
-                EndJumpAirborne();
-            }
-        }
-
-        /// <summary>Ends the airborne hold — drop the ClimbJump pose + camera back to locomotion.</summary>
-        private void EndJumpAirborne()
-        {
-            _jumpAirborne = false;
-            _jumpReattachBlocked = false;
-            _rig?.SetMasterWeight(0f);
-            if (_animator != null)
-            {
-                _animator.SetBool(_hIsClimbing, false);
-                if (_climbLayerIndex >= 0) _animator.SetLayerWeight(_climbLayerIndex, 0f);
-                if (_climbLegsLayerIndex >= 0) _animator.SetLayerWeight(_climbLegsLayerIndex, 0f);
-            }
-            if (_cameraOverridden) RestoreBracedReadyCamera();
-            Debug.Log("[ClimbController] Jump airborne hold ended (land / fall).");
-        }
-
-        /// <summary>Post-solve head turn: the body ROOT already yawed by the torso angle (grip-preserving, in
-        /// UpdateBodyPose); add the EXTRA head yaw here so the gaze lands ~away from the wall. The head isn't
-        /// IK-driven, so rotating it post-solve drags no hand. Scaled by the eased <see cref="_readyT"/>.</summary>
-        private void ApplyBracedReadyTurn()
-        {
-            if (_mode != ClimbMode.BracedReady || _rig == null || headBone == null) return;
-            float w = _readyT * _rig.MasterWeight;
-            if (w <= 0.001f) return;
-            float sign = bracedReadyTurnInvert ? -_readySign : _readySign;
-            headBone.rotation = Quaternion.AngleAxis(bracedReadyHeadAngle * w * sign, transform.up) * headBone.rotation;
-        }
-
-        /// <summary>
-        /// Reach-bottom: if solid ground is within <see cref="reachBottomDistance"/> below the body, step off
-        /// (release with zero vertical velocity). Only once the grab has fully faded in, so it never fires
-        /// during the grab transition. Returns true if it released this frame.
-        /// </summary>
-        private bool TryReachBottom()
-        {
-            if (!enableReachBottom || _mantling || _gettingUp) return false;
-            if (_rig.MasterWeight < 0.99f) return false;   // not while the grab is still fading in
-            Vector3 origin = transform.position + Vector3.up * 0.1f;
-            if (!Physics.Raycast(origin, Vector3.down, reachBottomDistance + 0.1f,
-                                 mantleSurfaceMask, QueryTriggerInteraction.Ignore))
-                return false;
-            BeginRelease();   // zeroes vertical velocity for a clean step-off
-            Debug.Log("[ClimbController] Reach-bottom — stepping off near the ground.");
-            return true;
-        }
-
-        /// <summary>
-        /// Reach-top check: when the hand holds face far enough UP (we're at a near-horizontal top edge)
-        /// AND there's clear space above + standing room on top, start the mantle. Automatic (brief §2.8).
-        /// Returns true if the mantle took over this frame.
-        /// </summary>
-        private bool TryMantle()
-        {
-            if (!enableMantle || _mantling) return false;
-            if (IsTrunk && !mantleOnTrunks) return false;   // trunks don't top-out (no standable tip)
-            // Two ways to be "at a top": the holds tilt up (trunk tip) OR there's no reachable hold above
-            // (a parsed vertical cliff's top holds face HORIZONTALLY, so the orientation test alone misses it).
-            bool topByOrientation = Vector3.Dot(AvgOutward(), Vector3.up) >= mantleEnterDot;
-            if (!topByOrientation && !AtSurfaceTop()) return false;
-            if (!ComputeMantleLanding(out Vector3 landing, out Quaternion landRot)) return false;
-            BeginMantle(landing, landRot);
-            return true;
-        }
-
-        /// <summary>
-        /// True when no still-climbable hold sits above the hands — i.e. we've run out of up-holds, the
-        /// surface-agnostic "reached the top" signal (works for flat-topped parsed cliffs whose top holds
-        /// face horizontally). "Up" is the trunk axis on a trunk, world-up otherwise.
-        /// </summary>
-        private bool AtSurfaceTop()
-        {
-            if (_currentSurface == null) return false;
-            var holds = _currentSurface.Holds;
-            if (holds == null || holds.Count == 0) return false;
-
-            Vector3 climbUp = IsTrunk ? TrunkUp() : Vector3.up;
-            Vector3 hands = _rig.HandAverage;
-            Transform st = _currentSurface.transform;
-            float reachSqr = mantleReachAbove * mantleReachAbove;
-
-            for (int i = 0; i < holds.Count; i++)
-            {
-                Vector3 delta = st.TransformPoint(holds[i].LocalPosition) - hands;
-                if (Vector3.Dot(delta, climbUp) < mantleHoldAboveMargin) continue;  // not above the hands
-                if (delta.sqrMagnitude <= reachSqr) return false;                   // a reachable up-hold → keep climbing
-            }
-            return true;
-        }
-
-        /// <summary>
-        /// Probes for a valid top-out: clear space above the hands, a near-horizontal surface to stand on
-        /// just past the lip, and an unobstructed standing capsule there. All probes use <see cref="mantleSurfaceMask"/>.
-        /// </summary>
-        private bool ComputeMantleLanding(out Vector3 landing, out Quaternion landRot)
-        {
-            landing = Vector3.zero;
-            landRot = transform.rotation;
-
-            Vector3 hands = _rig.HandAverage;
-
-            // The up-ray starts near/inside the player's own capsule, so disable it for the probes — a
-            // self-hit (with a broad mantleSurfaceMask) would otherwise read as "blocked" and veto the mantle.
-            CharacterController cc = _motor?.Controller;
-            bool ccWasEnabled = cc != null && cc.enabled;
-            if (ccWasEnabled) cc.enabled = false;
-            try
-            {
-                // 1) Clear space above the lip — the up-ray must MISS (nothing to climb into).
-                if (Physics.Raycast(hands, Vector3.up, mantleClearanceUp, mantleSurfaceMask, QueryTriggerInteraction.Ignore))
-                    return false;
-
-                // 2) Find the top surface just past the lip (horizontal "inward" = toward the platform).
-                Vector3 inwardFlat = Vector3.ProjectOnPlane(-AvgOutward(), Vector3.up);
-                inwardFlat = inwardFlat.sqrMagnitude > 1e-4f
-                    ? inwardFlat.normalized
-                    : Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
-                Vector3 probeXZ = hands + inwardFlat * mantleLandingForward;
-                Vector3 probeTop = probeXZ + Vector3.up * mantleLandingProbeUp;
-                if (!Physics.Raycast(probeTop, Vector3.down, out RaycastHit hit,
-                                     mantleLandingProbeUp + mantleLandingProbeDown,
-                                     mantleSurfaceMask, QueryTriggerInteraction.Ignore))
-                    return false;
-                // Reject a near-vertical "top" (we hit a wall, not a ledge surface to stand on).
-                if (Vector3.Angle(hit.normal, Vector3.up) > 50f) return false;
-
-                // 3) Standing room: an unobstructed capsule at the landing.
-                float r = cc != null ? cc.radius : 0.3f;
-                float h = cc != null ? Mathf.Max(cc.height, 2f * r) : 1.8f;
-                Vector3 footPt = hit.point + Vector3.up * (r + 0.02f);
-                Vector3 headPt = hit.point + Vector3.up * (h - r);
-                if (Physics.CheckCapsule(footPt, headPt, r * 0.95f, mantleSurfaceMask, QueryTriggerInteraction.Ignore))
-                    return false;
-
-                landing = hit.point;                              // controller pivot sits at the feet
-                landRot = Quaternion.LookRotation(inwardFlat, Vector3.up);
-            }
-            finally
-            {
-                if (ccWasEnabled) cc.enabled = true;
-            }
-            return true;
-        }
-
-        /// <summary>Starts the scripted top-out: capture start/landing, play ClimbUp, begin fading the IK out.</summary>
-        private void BeginMantle(Vector3 landing, Quaternion landRot)
-        {
-            _mantling = true;
-            _mantleTimer = 0f;
-            _mantleStart = transform.position;
-            _mantleTarget = landing;
-            _mantleStartRot = transform.rotation;
-            _mantleTargetRot = landRot;
-
-            // Split start→landing into a vertical and a horizontal (forward) leg so each can be shaped
-            // independently by its curve (classic up-then-over mantle, sync-able to the ClimbUp clip).
-            Vector3 delta = _mantleTarget - _mantleStart;
-            _mantleUpAxis = Vector3.up;
-            _mantleUpDist = delta.y;
-            Vector3 horiz = new Vector3(delta.x, 0f, delta.z);
-            _mantleFwdDist = horiz.magnitude;
-            _mantleFwdAxis = _mantleFwdDist > 1e-4f ? horiz / _mantleFwdDist : transform.forward;
-
-            // Feet/legs stop driving; the ClimbUp clip owns the pose while we translate.
-            _rig.SetEffectorWeight(ClimbEffector.LeftFoot, 0f);
-            _rig.SetEffectorWeight(ClimbEffector.RightFoot, 0f);
-            _lFootWeight = _rFootWeight = 0f;
-            _lFootLocked = _rFootLocked = false;
-            if (_animator != null && _climbLegsLayerIndex >= 0)
-                _animator.SetLayerWeight(_climbLegsLayerIndex, 0f);
-
-            // Fade the FBBIK effectors out over the move so the cosmetic ClimbUp clip reads through.
-            _masterWeightTarget = 0f;
-            if (_animator != null && _climbLayerIndex >= 0)
-            {
-                if (_animator.HasState(_climbLayerIndex, _hClimbUp))
-                    _animator.CrossFade(_hClimbUp, ikFadeOutDuration, _climbLayerIndex, 0f);
-                else
-                    Debug.LogWarning("[ClimbController] No 'ClimbUp' state found on the 'ClimbingLayer' — " +
-                        "the mantle clip won't play (the scripted move still runs). It must be named exactly " +
-                        "'ClimbUp' and be a TOP-LEVEL state in the ClimbingLayer (not inside a sub-state-machine, " +
-                        "not on another layer). No transitions are needed — CrossFade drives it directly.");
-            }
-
-            Debug.Log($"[ClimbController] Mantle start → landing {landing}.");
-        }
-
-        /// <summary>Scripted body move onto the ledge; finalized by OnMantleComplete (or the safety timeout).</summary>
-        private void TickMantle(float dt)
-        {
-            _mantleTimer += dt;
-            float t = mantleDuration > 0f ? Mathf.Clamp01(_mantleTimer / mantleDuration) : 1f;
-
-            // Vertical and forward driven by SEPARATE curves so "rise first, then move over" is authorable
-            // and the timing matches the ClimbUp clip (mantleDuration = clip length).
-            float up = mantleUpCurve.Evaluate(t);
-            float fwd = mantleForwardCurve.Evaluate(t);
-            transform.position = _mantleStart + _mantleUpAxis * (_mantleUpDist * up)
-                                              + _mantleFwdAxis * (_mantleFwdDist * fwd);
-            transform.rotation = Quaternion.Slerp(_mantleStartRot, _mantleTargetRot, Mathf.SmoothStep(0f, 1f, t));
-
-            if (_mantleTimer >= mantleSafetyTimeout) FinishMantle();
-        }
-
-        /// <summary>Animation event at the end of the ClimbUp clip — hands control back to the FSM, standing on top.</summary>
-        public void OnMantleComplete()
-        {
-            if (_mantling) FinishMantle();
-        }
-
-        /// <summary>Completes the top-out: snap to the landing, zero vertical velocity, cool down re-grab, release control.</summary>
-        private void FinishMantle()
-        {
-            transform.position = _mantleTarget;
-            transform.rotation = _mantleTargetRot;
-            _mantling = false;
-            _motor?.SetVerticalVelocity(0f);
-            _regrabCooldownTimer = regrabCooldown;
-
-            // Cross-fade the climb pose (ClimbUp ends crouched) out to the standing base idle instead of
-            // dropping the layer instantly — control stays locked (_isClimbing true) until the fade ends.
-            if (mantleGetupFade > 0f && _animator != null && _climbLayerIndex >= 0)
-            {
-                _gettingUp = true;
-                _getupTimer = 0f;
-                Debug.Log("[ClimbController] Mantle complete — fading climb pose out to stand.");
-            }
-            else
-            {
-                FinishRelease();   // isClimbing=false, layer weights 0, ReleaseExternalControl
-                Debug.Log("[ClimbController] Mantle complete — standing on top.");
-            }
-        }
-
-        /// <summary>
-        /// Post-mantle stop-gap: fades the ClimbingLayer weight 1→0 so the crouched ClimbUp end pose blends
-        /// into the standing base idle (no hard pop). Control is held (external control still active) until
-        /// the fade completes, then control returns. Superseded later by a real ClimbUp→StandUp clip.
-        /// </summary>
-        private void TickGetup(float dt)
-        {
-            _getupTimer += dt;
-            float t = mantleGetupFade > 0f ? Mathf.Clamp01(_getupTimer / mantleGetupFade) : 1f;
-            if (_animator != null && _climbLayerIndex >= 0)
-                _animator.SetLayerWeight(_climbLayerIndex, 1f - t);
-
-            if (t >= 1f)
-            {
-                _gettingUp = false;
-                FinishRelease();   // isClimbing=false, layer weights 0, ReleaseExternalControl
-            }
-        }
-
-        /// <summary>
-        /// Reference hip point the feet anchor from: a fixed drop below the hand-average for now.
-        /// The two-mass pendulum will repoint this at its lower mass later (single seam, one line).
-        /// </summary>
-        private Vector3 HipPosition =>
-            _rig.HandAverage + AvgOutward() * hipForwardOffset - Vector3.up * hipDropFromHands;
-
-        /// <summary>
-        /// Plants or dangles each foot. In free-hang orientation both feet dangle (IK off, pose
-        /// shows the dangle). Otherwise each foot probes its OWN anchor (down + to its side of the
-        /// hip), SphereCasts into the surface, and — if it hits within leg reach — plants there;
-        /// a miss or an over-reach leaves that foot free. One foot steps at a time (the other foot
-        /// and the same-side hand must be settled), so there are always 3+ contact points.
-        /// </summary>
-        private void UpdateFeet(float dt)
-        {
-            if (_footCooldown > 0f) _footCooldown -= dt;
-
-            if (useAnimatedLegs)
-            {
-                // Legs come from the masked climb clip; feet are corrected to the surface in SmearFeet
-                // (FinalIK pre-solve). Zero the procedural foot effectors so EffectorRig doesn't fight it.
-                _rig.SetEffectorWeight(ClimbEffector.LeftFoot, 0f);
-                _rig.SetEffectorWeight(ClimbEffector.RightFoot, 0f);
-                _lFootWeight = _rFootWeight = 0f;
-                UpdateLegBlend(dt);
-                return;
-            }
-
-            if (_freeHang)
-            {
-                FadeFootWeight(ClimbEffector.LeftFoot, 0f, dt);
-                FadeFootWeight(ClimbEffector.RightFoot, 0f, dt);
-                return;
-            }
-
-            UpdateFoot(ClimbEffector.LeftFoot, ClimbEffector.LeftHand, -1f, dt);
-            UpdateFoot(ClimbEffector.RightFoot, ClimbEffector.RightHand, +1f, dt);
-        }
-
-        /// <summary>
-        /// Drives the lower-body climb blend: ClimbMoveX/Y follow the movement direction (eased), and the
-        /// ClimbLegsLayer weight tracks the climb fade. The 2D blend's centre (0,0) should be the idle
-        /// braced-legs pose; +Y up, −Y down, ±X traverse.
-        /// </summary>
-        private void UpdateLegBlend(float dt)
-        {
-            if (_animator == null) return;
-
-            Vector2 mv = _input != null ? _input.MoveInput : Vector2.zero;
-            if (mv.sqrMagnitude < minMoveInput * minMoveInput) mv = Vector2.zero;
-
-            // Legs animate only while the character is actually advancing between holds — not when input is
-            // held but traversal is stuck (no reachable hold). A hand step tops up a short hold timer so the
-            // legs keep moving through the gaps between steps; when stepping stops the legs FREEZE where they
-            // were (the blend param holds + ClimbLegsSpeed → 0), instead of returning to the idle pose.
-            if (_rig.AnyMoving) _legMoveTimer = climbLegStopDelay;
-            else _legMoveTimer = Mathf.Max(0f, _legMoveTimer - dt);
-            bool legsMoving = _legMoveTimer > 0f;
-
-            if (legsMoving)
-                _legBlend = Vector2.MoveTowards(_legBlend, mv, climbMoveSmooth * dt);
-            // else: hold _legBlend at its last value — legs stay in their stride pose.
-
-            _animator.SetFloat(_hClimbMoveX, _legBlend.x);
-            _animator.SetFloat(_hClimbMoveY, _legBlend.y);
-            // Pause the leg clip when frozen so looping stride clips don't keep cycling in place. Hook this
-            // float to the leg blend-tree state's Speed Multiplier in the animator (no-op if not wired).
-            _animator.SetFloat(_hClimbLegsSpeed, legsMoving ? 1f : 0f);
-            if (_climbLegsLayerIndex >= 0)
-                _animator.SetLayerWeight(_climbLegsLayerIndex, _rig.MasterWeight * _bracedWeight);
-        }
-
-        /// <summary>
-        /// Foot-smear IK (runs as the FinalIK pre-solve callback). For each foot it reads the animator's
-        /// posed foot position, casts to the surface, and pins the effector there — with a weight derived
-        /// from how close the animated foot is to the surface, so a clip-lifted foot (swing) follows the
-        /// animation while a clip-planted foot snaps to the real geometry. No-op unless climbing with
-        /// animated legs.
-        /// </summary>
-        private void SmearFeet()
-        {
-            if (!_isClimbing || !useAnimatedLegs || _rig == null || ik == null || ik.solver == null) return;
-            SmearFoot(ik.solver.leftFootEffector, -1f, ref _lFootLocked, ref _lFootLockPos, ref _lFootLockRot);
-            SmearFoot(ik.solver.rightFootEffector, +1f, ref _rFootLocked, ref _rFootLockPos, ref _rFootLockRot);
-        }
-
-        private void SmearFoot(IKEffector eff, float sideSign, ref bool locked, ref Vector3 lockPos, ref Quaternion lockRot)
-        {
-            if (eff == null || eff.bone == null) return;
-            int idx = sideSign < 0f ? 0 : 1;
-
-            Vector3 outward = AvgOutward();
-            Vector3 footPos = eff.bone.position;                 // animator-posed foot (pre-solve)
-            float w = _rig.MasterWeight * footIKWeight * _bracedWeight;   // foot IK fades out in free hang
-
-            // Curvature-aware inward direction: aim the cast at the trunk-axis estimate (a point
-            // trunkAxisDepth behind the hand surface), so a foot splayed around the curve still casts
-            // INTO the trunk instead of shooting past it along the body's fixed radial.
-            Vector3 axis = _rig.HandAverage - outward * trunkAxisDepth;
-            axis.y = footPos.y;
-            Vector3 toAxis = axis - footPos;
-            Vector3 inward = toAxis.sqrMagnitude > 1e-4f ? toAxis.normalized : -outward;
-            Vector3 origin = footPos - inward * footSmearBackup;
-
-            bool hasHit = Physics.SphereCast(origin, footSmearRadius, inward, out RaycastHit hit,
-                                             footSmearBackup + footSmearMaxDist, climbableLayers, QueryTriggerInteraction.Ignore);
-            float contactDist = hasHit ? hit.distance - footSmearBackup : float.MaxValue;
-            float stance = 1f - Mathf.Clamp01(Mathf.InverseLerp(footContactNear, footContactFar, contactDist));
-
-            // Pick this frame's target pose + weights: hold the lock, take a fresh plant, or follow the clip.
-            Vector3 targetPos;
-            Quaternion targetRot;
-            float posW, rotW;
-
-            bool holdingLock = enableFootLock && locked && stance >= footLockExit &&
-                               (eff.bone.position - lockPos).sqrMagnitude < footLockBreak * footLockBreak;
-            if (holdingLock)
-            {
-                targetPos = lockPos;
-                targetRot = lockRot;
-                posW = w;
-                rotW = w * footSmearRotWeight;
-            }
-            else
-            {
-                locked = false;   // foot lifted (clip) or body climbed past → re-plant
-                if (hasHit)
-                {
-                    targetPos = hit.point + hit.normal * footSmearSurfaceOffset;
-                    targetRot = PlantRotation(hit.normal, sideSign, eff.bone.rotation);
-                    posW = w * stance;
-                    rotW = w * stance * footSmearRotWeight;
-                    if (enableFootLock && stance > footLockEnter) { locked = true; lockPos = targetPos; lockRot = targetRot; }
-                }
-                else
-                {
-                    targetPos = _footSmoothPos[idx];   // hold last (weight 0 → no visible effect / no swoop)
-                    targetRot = _footSmoothRot[idx];
-                    posW = 0f;
-                    rotW = 0f;
-                }
-            }
-
-            // Ease the IK target so plant / lift / lock-break / re-plant blend instead of snapping.
-            if (!_footSmoothInit[idx]) { _footSmoothPos[idx] = targetPos; _footSmoothRot[idx] = targetRot; _footSmoothInit[idx] = true; }
-            float s = footSmoothSpeed > 0f ? 1f - Mathf.Exp(-footSmoothSpeed * Time.deltaTime) : 1f;
-            _footSmoothPos[idx] = Vector3.Lerp(_footSmoothPos[idx], targetPos, s);
-            _footSmoothRot[idx] = Quaternion.Slerp(_footSmoothRot[idx], targetRot, s);
-
-            eff.position = _footSmoothPos[idx];
-            eff.rotation = _footSmoothRot[idx];
-            eff.positionWeight = posW;
-            eff.rotationWeight = rotW;
-        }
-
-        /// <summary>
-        /// Character-relative plant rotation: sole on the surface (up = normal), toes up + out to the
-        /// foot's own side in character space, + the rig-convention euler offset (mirrored for the right foot).
-        /// </summary>
-        private Quaternion PlantRotation(Vector3 normal, float sideSign, Quaternion fallback)
-        {
-            Vector3 toe = transform.up + transform.right * (sideSign * footToeSide);
-            toe = Vector3.ProjectOnPlane(toe, normal);
-            Quaternion rot = toe.sqrMagnitude > 1e-5f ? Quaternion.LookRotation(toe.normalized, normal) : fallback;
-            Vector3 off = sideSign < 0f ? footPlantRotation : Vector3.Scale(footPlantRotation, footPlantMirror);
-            return rot * Quaternion.Euler(off);
-        }
-
-        private void UpdateFoot(ClimbEffector foot, ClimbEffector sameSideHand, float sideSign, float dt)
-        {
-            Vector3 hip = HipPosition;
-            Vector3 avgOut = AvgOutward();
-            Vector3 handAvg = _rig.HandAverage;
-            Vector3 bodyRight = transform.right;
-            Vector3 desired = hip - Vector3.up * footDrop + bodyRight * (sideSign * footSide);
-            ClimbEffector other = foot == ClimbEffector.LeftFoot ? ClimbEffector.RightFoot : ClimbEffector.LeftFoot;
-
-            // STICKINESS: keep the current foot-hold unless the body has drifted far from it. Re-picking
-            // nearest-to-desired every frame made feet flip-flop between two near-equal holds (worsened by
-            // the body-rotation feedback loop); staying put unless there's a real reason removes the jitter.
-            int curIdx = FootHoldIndex(foot);
-            bool curValid = curIdx >= 0 && FootHoldValid(curIdx, hip, handAvg, avgOut);
-            if (curValid && (HoldWorldPos(curIdx) - desired).sqrMagnitude <= footStickRadius * footStickRadius)
-            {
-                FadeFootWeight(foot, 1f, dt);   // happy where it is — no search, no step
-                return;
-            }
-
-            // Want to move (dangling, drifted, or current hold invalid). Find the best hold for `desired`.
-            bool found = FindFootHold(desired, hip, bodyRight, sideSign, handAvg, avgOut, other,
-                                      out int idx, out Vector3 hp, out Quaternion hr);
-            if (found)
-            {
-                // One foot at a time: step only when settled and the same-side hand / other foot aren't moving.
-                bool canStep = _footCooldown <= 0f && !_rig.IsMoving(foot)
-                               && !_rig.IsMoving(other) && !_rig.IsMoving(sameSideHand);
-                if (canStep)
-                {
-                    _rig.SetPoseTarget(foot, hp, hr, footMoveDuration);   // interpolate — no harsh snap
-                    SetFootHoldIndex(foot, idx);
-                    _footCooldown = footStepInterval;
-                    FadeFootWeight(foot, 1f, dt);
-                }
-                else
-                {
-                    // Gate closed (another limb mid-move): stay weighted if we have a usable hold, else wait.
-                    FadeFootWeight(foot, (curValid || _rig.IsMoving(foot)) ? 1f : 0f, dt);
-                }
-            }
-            else if (curValid)
-            {
-                FadeFootWeight(foot, 1f, dt);   // no better hold found — keep the (drifted) current one
-            }
-            else
-            {
-                // Truly nothing reachable (gap / overhang) → dangle under the hip, IK off.
-                SetFootHoldIndex(foot, -1);
-                if (!_rig.IsMoving(foot)) _rig.SnapToPose(foot, desired, transform.rotation);
-                FadeFootWeight(foot, 0f, dt);
-            }
-        }
-
-        private int FootHoldIndex(ClimbEffector foot) =>
-            foot == ClimbEffector.LeftFoot ? _lFootHoldIdx : _rFootHoldIdx;
-
-        private void SetFootHoldIndex(ClimbEffector foot, int idx)
-        {
-            if (foot == ClimbEffector.LeftFoot) _lFootHoldIdx = idx; else _rFootHoldIdx = idx;
-        }
-
-        private Vector3 HoldWorldPos(int idx) =>
-            _currentSurface.transform.TransformPoint(_currentSurface.Holds[idx].LocalPosition);
-
-        private Quaternion HoldWorldRot(int idx) =>
-            _currentSurface.transform.rotation * _currentSurface.Holds[idx].LocalRotation;
-
-        /// <summary>A foot's current hold is still usable: in leg reach, below the hands, and on the same face.</summary>
-        private bool FootHoldValid(int idx, Vector3 hip, Vector3 handAvg, Vector3 avgOut)
-        {
-            if (_currentSurface == null || !_currentSurface.HoldsReady || idx >= _currentSurface.Holds.Count)
-                return false;
-            Vector3 wp = HoldWorldPos(idx);
-            if ((wp - hip).sqrMagnitude > legReach * legReach) return false;
-            if (Vector3.Dot(wp - handAvg, Vector3.up) > -footBelowHands) return false;
-            if (Vector3.Dot(HoldWorldRot(idx) * Vector3.forward, avgOut) < facingCoherence) return false;
-            return true;
-        }
-
-        /// <summary>
-        /// Best foot-hold (by index) nearest the desired plant point: within leg reach of the hip, below
-        /// the hands, on the foot's own side (anti-cross), clear of both hands and the other foot, same face.
-        /// </summary>
-        private bool FindFootHold(Vector3 desired, Vector3 hip, Vector3 bodyRight, float sideSign,
-                                  Vector3 handAvg, Vector3 avgOut, ClimbEffector other,
-                                  out int index, out Vector3 pos, out Quaternion rot)
-        {
-            index = -1;
-            pos = Vector3.zero;
-            rot = Quaternion.identity;
-            var s = _currentSurface;
-            if (s == null || !s.HoldsReady) return false;
-
-            Vector3 lh = _rig.GetCurrentPosition(ClimbEffector.LeftHand);
-            Vector3 rh = _rig.GetCurrentPosition(ClimbEffector.RightHand);
-            Vector3 of = _rig.GetCurrentPosition(other);
-
-            Transform st = s.transform;
-            var holds = s.Holds;
-            float legSqr = legReach * legReach;
-            float clearSqr = footHoldClearance * footHoldClearance;
-            float best = float.MaxValue;
-
-            for (int i = 0; i < holds.Count; i++)
-            {
-                Vector3 wp = st.TransformPoint(holds[i].LocalPosition);
-
-                if ((wp - hip).sqrMagnitude > legSqr) continue;                               // within leg reach
-                if (Vector3.Dot(wp - handAvg, Vector3.up) > -footBelowHands) continue;         // below the hands
-                if (Vector3.Dot(wp - hip, bodyRight) * sideSign < -footCrossMargin) continue;  // own side (anti-cross)
-                if ((wp - lh).sqrMagnitude < clearSqr) continue;                              // clear of hands + other foot
-                if ((wp - rh).sqrMagnitude < clearSqr) continue;
-                if ((wp - of).sqrMagnitude < clearSqr) continue;
-
-                Quaternion wr = st.rotation * holds[i].LocalRotation;
-                if (Vector3.Dot(wr * Vector3.forward, avgOut) < facingCoherence) continue;     // same face
-
-                float d = (wp - desired).sqrMagnitude;
-                if (d < best) { best = d; index = i; pos = wp; rot = wr; }
-            }
-            return index >= 0;
-        }
-
-        private float FootWeight(ClimbEffector foot) =>
-            foot == ClimbEffector.LeftFoot ? _lFootWeight : _rFootWeight;
-
-        private void FadeFootWeight(ClimbEffector foot, float target, float dt)
-        {
-            float w = Mathf.MoveTowards(FootWeight(foot), target, footWeightFadeSpeed * dt);
-            if (foot == ClimbEffector.LeftFoot) _lFootWeight = w; else _rFootWeight = w;
-            _rig.SetEffectorWeight(foot, w);
-        }
-
-        /// <summary>
-        /// Forces each knee toward an explicit away-from-wall / out bend via FBBIK leg bend
-        /// constraints — the same mirror-image fix the elbows need (the legs are reflections, so a
-        /// shared foot rotation would flip one knee). Weight scales with how planted the feet are.
-        /// </summary>
-        private void SetLegBendDirections(float weight)
-        {
-            if (ik == null || ik.solver == null || !ik.solver.initiated) return;
-            var solver = ik.solver;
-
-            Vector3 bodyRight = transform.right;
-            Vector3 awayFromWall = -transform.forward;                                  // body faces into the wall
-            Vector3 leftDir = (awayFromWall - bodyRight * kneeOutward).normalized;      // left knee: out-from-wall + left
-            Vector3 rightDir = (awayFromWall + bodyRight * kneeOutward).normalized;     // right knee: out-from-wall + right
-
-            var lc = solver.leftLegChain.bendConstraint;
-            lc.bendGoal = null; lc.direction = leftDir; lc.weight = weight;
-            var rc = solver.rightLegChain.bendConstraint;
-            rc.bendGoal = null; rc.direction = rightDir; rc.weight = weight;
-        }
-
-        /// <summary>Pushes the live-tunable per-hand grip offsets onto the hand effectors (applied at write time).</summary>
-        private void ApplyGripOffset()
-        {
-            _rig.SetRotationOffset(ClimbEffector.LeftHand, Quaternion.Euler(leftHandGripRotation));
-            _rig.SetRotationOffset(ClimbEffector.RightHand, Quaternion.Euler(rightHandGripRotation));
-            _rig.SetRotationOffset(ClimbEffector.LeftFoot, Quaternion.Euler(footGripRotation));
-            _rig.SetRotationOffset(ClimbEffector.RightFoot, Quaternion.Euler(Vector3.Scale(footGripRotation, footGripMirror)));
-
-            _rig.SetPositionOffset(ClimbEffector.LeftHand, handHoldOffset);    // wrist→fingers shift at the hold
-            _rig.SetPositionOffset(ClimbEffector.RightHand, handHoldOffset);
-        }
-
-        /// <summary>
-        /// Forces each arm's elbow to bend toward an explicit down/out direction via FBBIK bend
-        /// constraints, INDEPENDENT of hand rotation. Without this FinalIK derives the elbow bend
-        /// from the hand effector rotation (IKConstraintBend.GetDir), so the 180° grip that faces the
-        /// palm flips the elbow — and since the arms are mirror images, it flips the right but not the
-        /// left. Weight 1 overrides that, so both palms AND both elbows come out correct.
-        /// </summary>
-        private void SetArmBendDirections(float weight)
-        {
-            if (ik == null || ik.solver == null || !ik.solver.initiated) return;
-            var solver = ik.solver;
-
-            Vector3 bodyRight = transform.right;
-            Vector3 leftDir = (Vector3.down - bodyRight * elbowOutward).normalized;   // left elbow: down + left
-            Vector3 rightDir = (Vector3.down + bodyRight * elbowOutward).normalized;  // right elbow: down + right
-
-            var lc = solver.leftArmChain.bendConstraint;
-            lc.bendGoal = null; lc.direction = leftDir; lc.weight = weight;
-            var rc = solver.rightArmChain.bendConstraint;
-            rc.bendGoal = null; rc.direction = rightDir; rc.weight = weight;
-        }
-
-        /// <summary>
-        /// Move-input traversal: when no hand is mid-move, step the trailing hand toward a hold in the
-        /// input direction (in the LOCAL surface plane); the body follows via UpdateBodyPose. Surface-
-        /// aware (follows curvature); no feet / no sway yet.
-        /// </summary>
-        private void HandleTraversal(float dt)
-        {
-            if (_moveCooldown > 0f) _moveCooldown -= dt;
-            if (_input == null || _rig.AnyMoving || _moveCooldown > 0f) return;
-
-            Vector2 mv = _input.MoveInput;
-            if (mv.sqrMagnitude < minMoveInput * minMoveInput) return;
-
-            // Free hang = brachiation: turn to face the input first, then traverse (separate model).
-            if (_freeHang) { HandleFreeHangTraversal(mv); return; }
-
-            // Camera-relative input mapped onto the surface tangent plane: x = screen-right projected
-            // onto the surface, y = up the surface. Falls back gracefully on near-horizontal surfaces.
-            Vector3 avgOut = AvgOutward();
-            if (_cam == null && Camera.main != null) _cam = Camera.main.transform;
-
-            // On a trunk, "up" follows the trunk axis (toward the tip) rather than world up.
-            Vector3 upRef = (alignTorsoToTrunkAxis && IsTrunk) ? TrunkUp() : Vector3.up;
-            Vector3 camRight = _cam != null ? _cam.right : transform.right;
-            Vector3 xDir = Vector3.ProjectOnPlane(camRight, avgOut);
-            Vector3 yDir = Vector3.ProjectOnPlane(upRef, avgOut);
-            if (xDir.sqrMagnitude < 1e-4f) xDir = transform.right;
-            if (yDir.sqrMagnitude < 1e-4f) yDir = Vector3.Cross(avgOut, xDir);
-            Vector3 traverseDir = xDir.normalized * mv.x + yDir.normalized * mv.y;
-            if (traverseDir.sqrMagnitude < 1e-4f) return;
-            traverseDir.Normalize();
-
-            Vector3 rhPos = _rig.GetCurrentPosition(ClimbEffector.RightHand);
-            Vector3 lhPos = _rig.GetCurrentPosition(ClimbEffector.LeftHand);
-
-            // Try the TRAILING hand first (less advanced along traverseDir, measured RELATIVE to the
-            // other hand). If it's blocked — anti-cross, caught up, or no reachable hold — try the
-            // OTHER hand instead. That turns the deadlock (trailing hand caught up to the lead but
-            // can't cross, so the lead never gets its turn) into a natural shuffle gait.
-            bool primaryRight = Vector3.Dot(rhPos - lhPos, traverseDir) <= 0f;
-            if (TryStepHand(primaryRight, rhPos, lhPos, traverseDir, avgOut) ||
-                TryStepHand(!primaryRight, rhPos, lhPos, traverseDir, avgOut))
-                StartBracedTurn();   // begin the per-step rotation tween toward the new facing
-        }
-
-        /// <summary>
-        /// Attempts to step one hand to a new hold for the current input direction. Handles the
-        /// close-the-gap (over-extended) case. Returns true if a hold was found and the move started.
-        /// </summary>
-        private bool TryStepHand(bool moveRight, Vector3 rhPos, Vector3 lhPos, Vector3 traverseDir, Vector3 avgOut)
-        {
-            Vector3 fromPos = moveRight ? rhPos : lhPos;
-            Vector3 otherPos = moveRight ? lhPos : rhPos;
-            Vector3 bodyRight = transform.right;
-            float sideSign = moveRight ? 1f : -1f;
-
-            // Over-extended → close the gap toward the other hand (drop the forward-progress
-            // requirement); otherwise leapfrog forward by traverseStep.
-            float separation = Vector3.Distance(rhPos, lhPos);
-            bool closeGap = separation > maxHandSeparation;
-            Vector3 ideal = closeGap ? otherPos : fromPos + traverseDir * traverseStep;
-            float minProgress = closeGap ? -1f : progressDot;
-
-            if (!FindReachableHold(_currentSurface, ideal, fromPos, otherPos, traverseDir, avgOut,
-                                   bodyRight, sideSign, minProgress, out Vector3 tp, out Quaternion tr))
-                return false;
-
-            ClimbEffector hand = moveRight ? ClimbEffector.RightHand : ClimbEffector.LeftHand;
-            _rig.SetPoseTarget(hand, tp, tr, traverseMoveDuration);
-            if (moveRight) { _rhOutward = tr * Vector3.forward; _rhUp = tr * Vector3.up; }
-            else { _lhOutward = tr * Vector3.forward; _lhUp = tr * Vector3.up; }
-            _moveCooldown = moveInterval;
-            return true;
-        }
-
-        /// <summary>
-        /// Free-hang traversal = brachiation. The body first TURNS to face the (camera-relative) input
-        /// direction, then travels. The turn is realised through hand-steps — one hand pivots on the
-        /// other and swings around an arc, rotating the hand pair (and the body facing) a little each
-        /// step — so a full re-face takes several holds. No forward progress until the body faces within
-        /// freeHangMoveAngle of the input; then the hands leapfrog forward in the facing direction.
-        /// </summary>
-        private void HandleFreeHangTraversal(Vector2 mv)
-        {
-            if (_cam == null && Camera.main != null) _cam = Camera.main.transform;
-            Vector3 camF = Vector3.ProjectOnPlane(_cam != null ? _cam.forward : transform.forward, Vector3.up);
-            Vector3 camR = Vector3.ProjectOnPlane(_cam != null ? _cam.right : transform.right, Vector3.up);
-            if (camF.sqrMagnitude < 1e-4f) camF = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
-            if (camR.sqrMagnitude < 1e-4f) camR = Vector3.ProjectOnPlane(transform.right, Vector3.up);
-            if (camF.sqrMagnitude < 1e-4f || camR.sqrMagnitude < 1e-4f) return;
-
-            Vector3 wish = camR.normalized * mv.x + camF.normalized * mv.y;
-            if (wish.sqrMagnitude < 1e-4f) return;
-            wish.Normalize();
-
-            if (_freeHangFacing.sqrMagnitude < 1e-4f) _freeHangFacing = wish;
-
-            float angleErr = Vector3.SignedAngle(_freeHangFacing, wish, Vector3.up);
-
-            if (Mathf.Abs(angleErr) > freeHangMoveAngle)
-            {
-                // TURN: rotate the hand pair toward the input — one hand-step at a time, no net travel.
-                // Commit the facing rotation only when a hand actually steps, so the turn is paced by holds.
-                float stepDeg = Mathf.Clamp(angleErr, -freeHangTurnPerStep, freeHangTurnPerStep);
-                bool stepRight = stepDeg < 0f;   // turning clockwise (right) → reach the right hand around first
-                if (TryStepHandArc(stepRight, stepDeg) || TryStepHandArc(!stepRight, stepDeg))
-                    _freeHangFacing = (Quaternion.AngleAxis(stepDeg, Vector3.up) * _freeHangFacing).normalized;
-            }
-            else
-            {
-                // Facing the input (within tolerance) → finish the last few degrees and leapfrog forward.
-                _freeHangFacing = Vector3.RotateTowards(_freeHangFacing, wish, Mathf.Deg2Rad * freeHangTurnPerStep, 0f);
-                Vector3 rhPos = _rig.GetCurrentPosition(ClimbEffector.RightHand);
-                Vector3 lhPos = _rig.GetCurrentPosition(ClimbEffector.LeftHand);
-                bool primaryRight = Vector3.Dot(rhPos - lhPos, wish) <= 0f;
-                if (!TryStepHand(primaryRight, rhPos, lhPos, wish, AvgOutward()))
-                    TryStepHand(!primaryRight, rhPos, lhPos, wish, AvgOutward());
-            }
-        }
-
-        /// <summary>
-        /// Steps one hand along an arc around the OTHER (pivot) hand by <paramref name="stepDeg"/> about
-        /// world up, walking the hand pair around to rotate the body's facing. Returns true if a hold was found.
-        /// </summary>
-        private bool TryStepHandArc(bool moveRight, float stepDeg)
-        {
-            ClimbEffector hand = moveRight ? ClimbEffector.RightHand : ClimbEffector.LeftHand;
-            ClimbEffector pivotE = moveRight ? ClimbEffector.LeftHand : ClimbEffector.RightHand;
-            Vector3 fromPos = _rig.GetCurrentPosition(hand);
-            Vector3 pivot = _rig.GetCurrentPosition(pivotE);
-            Vector3 ideal = pivot + Quaternion.AngleAxis(stepDeg, Vector3.up) * (fromPos - pivot);
-
-            if (!FindFreeHangHold(ideal, fromPos, pivot, out Vector3 tp, out Quaternion tr))
-                return false;
-
-            _rig.SetPoseTarget(hand, tp, tr, traverseMoveDuration);
-            if (moveRight) { _rhOutward = tr * Vector3.forward; _rhUp = tr * Vector3.up; }
-            else { _lhOutward = tr * Vector3.forward; _lhUp = tr * Vector3.up; }
-            _moveCooldown = moveInterval;
-            return true;
-        }
-
-        /// <summary>
-        /// Nearest hold to <paramref name="ideal"/> for a free-hang hand step: within the reach band of
-        /// the moving hand, clear of and within max separation of the pivot hand, on the same face. No
-        /// anti-cross / progress filters (the body is turning, not leapfrogging a fixed direction).
-        /// </summary>
-        private bool FindFreeHangHold(Vector3 ideal, Vector3 fromPos, Vector3 pivotPos, out Vector3 pos, out Quaternion rot)
-        {
-            pos = Vector3.zero;
-            rot = Quaternion.identity;
-            var s = _currentSurface;
-            if (s == null || !s.HoldsReady) return false;
-
-            Transform st = s.transform;
-            var holds = s.Holds;
-            float minSqr = minStepDistance * minStepDistance;
-            float maxSqr = maxStepReach * maxStepReach;
-            float clearSqr = handClearance * handClearance;
-            float maxSepSqr = maxHandSeparation * maxHandSeparation;
-            Vector3 climberOut = AvgOutward();
-            float best = float.MaxValue;
-            bool found = false;
-
-            for (int i = 0; i < holds.Count; i++)
-            {
-                Vector3 wp = st.TransformPoint(holds[i].LocalPosition);
-
-                float fromSqr = (wp - fromPos).sqrMagnitude;
-                if (fromSqr < minSqr || fromSqr > maxSqr) continue;            // reach band of the moving hand
-
-                float pivSqr = (wp - pivotPos).sqrMagnitude;
-                if (pivSqr < clearSqr || pivSqr > maxSepSqr) continue;         // clear of + within reach of the pivot hand
-
-                Quaternion wr = st.rotation * holds[i].LocalRotation;
-                if (Vector3.Dot(wr * Vector3.forward, climberOut) < facingCoherence) continue;   // same face
-
-                float d = (wp - ideal).sqrMagnitude;
-                if (d < best) { best = d; pos = wp; rot = wr; found = true; }
-            }
-            return found;
-        }
-
-        /// <summary>
-        /// Best next hold for a traversing hand: within the reach band of the moving hand, clear of the
-        /// other hand, lying along the input direction (progress, no back-and-forth), and on the same
-        /// face as the climber (outward normal coherent — stops it grabbing the far side of a trunk).
-        /// Among those, nearest to the ideal step point.
-        /// </summary>
-        private bool FindReachableHold(ClimbableSurface s, Vector3 ideal, Vector3 fromPos, Vector3 otherPos,
-                                       Vector3 traverseDir, Vector3 climberOut, Vector3 bodyRight, float sideSign,
-                                       float minProgress, out Vector3 pos, out Quaternion rot)
-        {
-            pos = Vector3.zero;
-            rot = Quaternion.identity;
-            if (s == null || !s.HoldsReady) return false;
-
-            Transform st = s.transform;
-            var holds = s.Holds;
-            float minSqr = minStepDistance * minStepDistance;
-            float maxSqr = maxStepReach * maxStepReach;
-            float clearSqr = handClearance * handClearance;
-            float maxSepSqr = maxHandSeparation * maxHandSeparation;
-            float best = float.MaxValue;
-            bool found = false;
-
-            for (int i = 0; i < holds.Count; i++)
-            {
-                Vector3 wp = st.TransformPoint(holds[i].LocalPosition);
-
-                Vector3 fromDelta = wp - fromPos;
-                float fromSqr = fromDelta.sqrMagnitude;
-                if (fromSqr < minSqr || fromSqr > maxSqr) continue;                    // reach band
-
-                Vector3 toOther = wp - otherPos;
-                float otherSqr = toOther.sqrMagnitude;
-                if (otherSqr < clearSqr) continue;                                     // clear of other hand
-                if (otherSqr > maxSepSqr) continue;                                    // cap hand separation
-                if (Vector3.Dot(toOther, bodyRight) * sideSign < -crossMargin) continue; // keep hands ~uncrossed (small slack)
-                if (Vector3.Dot(fromDelta.normalized, traverseDir) < minProgress) continue; // progress in input dir
-
-                Quaternion wr = st.rotation * holds[i].LocalRotation;
-                Vector3 outward = wr * Vector3.forward;
-                if (Vector3.Dot(outward, climberOut) < facingCoherence) continue;      // stay on the same face
-
-                float d = (wp - ideal).sqrMagnitude;
-                if (d < best)
-                {
-                    best = d;
-                    pos = wp;
-                    rot = wr;
-                    found = true;
-                }
-            }
-            return found;
-        }
-
-        /// <summary>Nearest hold on a surface to <paramref name="target"/>, excluding one near <paramref name="exclude"/>.</summary>
-        private bool FindHoldNear(ClimbableSurface s, Vector3 target, Vector3 exclude, out Vector3 pos, out Quaternion rot)
-        {
-            pos = Vector3.zero;
-            rot = Quaternion.identity;
-            if (s == null || !s.HoldsReady) return false;
-
-            Transform st = s.transform;
-            var holds = s.Holds;
-            float best = float.MaxValue;
-            bool found = false;
-            for (int i = 0; i < holds.Count; i++)
-            {
-                Vector3 wp = st.TransformPoint(holds[i].LocalPosition);
-                if ((wp - exclude).sqrMagnitude < 0.04f) continue;   // skip the same hold (~0.2 m)
-                float d = (wp - target).sqrMagnitude;
-                if (d < best)
-                {
-                    best = d;
-                    pos = wp;
-                    rot = st.rotation * holds[i].LocalRotation;
-                    found = true;
-                }
-            }
-            return found;
-        }
     }
 }

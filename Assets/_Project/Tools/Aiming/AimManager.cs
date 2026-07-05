@@ -150,8 +150,10 @@ public class AimManager : MonoBehaviour
             return;
 
         isAiming = true;
+        // SetActiveMode (via ChooseModeByCurrentItem) already calls EnterMode when isAiming is true —
+        // a second EnterMode here double-subscribed each mode's "Use" handler and leaked one
+        // subscription per aim session (ExitMode only removes one).
         ChooseModeByCurrentItem();
-        activeMode?.EnterMode();
 
         if (activeMode != null)
             RequestCameraTransition(activeMode.camHeight, activeMode.camDist, activeMode.camSide);
