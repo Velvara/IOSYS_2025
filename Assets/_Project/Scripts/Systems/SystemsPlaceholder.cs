@@ -22,12 +22,13 @@ namespace Game.PlayerV2.Systems
 
         /// <summary>
         /// Advances the survival system one frame. Pass true while the player is sprinting
-        /// (drains stamina); otherwise it recovers. Mirrors ThirdPersonController's per-frame
-        /// PlayerStamina.Tick call.
+        /// (drains stamina); otherwise it recovers. isGrounded feeds the climb-jump hold
+        /// (stamina frozen after a jump-off until landing/reattach); ordinary airborne frames
+        /// behave normally. Mirrors ThirdPersonController's per-frame PlayerStamina.Tick call.
         /// </summary>
-        public void Tick(bool isSprinting)
+        public void Tick(bool isSprinting, bool isGrounded)
         {
-            if (_stamina != null) _stamina.Tick(isSprinting);
+            if (_stamina != null) _stamina.Tick(isSprinting, isGrounded);
         }
 
         /// <summary>True while fatigued (stamina hit 0, recovering to the fatigue floor).</summary>

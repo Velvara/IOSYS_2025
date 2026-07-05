@@ -164,6 +164,11 @@ namespace Game.Climbing
             if (_animator != null && _climbLegsLayerIndex >= 0)
                 _animator.SetLayerWeight(_climbLegsLayerIndex, 0f);
 
+            // The mantle branch early-returns before TickClimb's per-frame SetClimbState, so the
+            // stamina system would keep the LAST state (possibly moving=true → phantom drain through
+            // the whole mantle). Freeze it at not-moving for the scripted move.
+            _stamina?.SetClimbState(true, false);
+
             // Fade the FBBIK effectors out over the move so the cosmetic ClimbUp clip reads through.
             _masterWeightTarget = 0f;
             if (_animator != null && _climbLayerIndex >= 0)

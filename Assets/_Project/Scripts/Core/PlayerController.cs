@@ -160,7 +160,7 @@ namespace Game.PlayerV2
                                      _inputHandler.HasMoveInput();
                 bool isSprinting = wantsToSprint && !_staminaSystem.IsFatigued &&
                                    _staminaSystem.CurrentStamina > 0f;
-                _staminaSystem.Tick(isSprinting);
+                _staminaSystem.Tick(isSprinting, IsGrounded);
             }
 
             // Update state manager (handles state transitions and updates)

@@ -59,6 +59,16 @@ namespace StarterAssets
         [Tooltip("Seconds per full blink cycle for the red arc. Default 0.4.")]
         public float StaminaRedBlinkRate = 0.4f;
 
+        [Header("Stamina Cost Preview (flashing pending-spend chunk)")]
+        [Tooltip("Base color of the announced-cost chunk (e.g. the climb jump cost while peeking in BracedReady).")]
+        public Color StaminaCostPreviewColor = new Color(1f, 0.85f, 0.2f, 1f);
+
+        [Tooltip("Color the cost chunk pulses to. Smooth pulse (hunger-style) — it announces a spend, it's not an emergency.")]
+        public Color StaminaCostPreviewBlinkColor = Color.white;
+
+        [Tooltip("Seconds per full pulse cycle of the cost chunk. Default 0.4.")]
+        public float StaminaCostPreviewBlinkRate = 0.4f;
+
         [Header("Stamina Bar Marker")]
         [Tooltip("Color of the fatigue-floor marker line. Default white.")]
         public Color StaminaMarkerColor = Color.white;
@@ -239,6 +249,16 @@ namespace StarterAssets
             _staminaBar.EffectiveMaxValue   = _data.NormalizedEffectiveMax;
             _staminaBar.Value               = _data.NormalizedStamina;
             _staminaBar.MarkerValue         = _data.NormalizedFatigueFloor;
+
+            // -- Stamina bar: pending-cost preview (slow pulse while an action is announced) --
+            float pendingCost = _data.NormalizedPendingCost;
+            _staminaBar.CostPreviewValue = pendingCost;
+            if (pendingCost > 0f)
+            {
+                float costPulse = Mathf.PingPong(Time.time / StaminaCostPreviewBlinkRate, 1f);
+                _staminaBar.CostPreviewColor = Color.Lerp(StaminaCostPreviewColor,
+                                                          StaminaCostPreviewBlinkColor, costPulse);
+            }
 
             _staminaBar.HungerPenaltyColor = hungerEmpty
                 ? hungerPulseColor

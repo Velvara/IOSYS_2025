@@ -28,6 +28,15 @@ namespace Game.PlayerV2.Systems
         /// </summary>
         float NormalizedHungerMaxPenalty { get; }
 
+        // -- Pending cost preview --
+        /// <summary>
+        /// Stamina an announced action WOULD spend right now, normalized 0-1 and already clamped
+        /// to the available stamina (spending clamps at zero). Zero when nothing is announced.
+        /// Drives the flashing cost-preview chunk on the stamina bar (e.g. the climb jump-off
+        /// cost while peeking in BracedReady).
+        /// </summary>
+        float NormalizedPendingCost { get; }
+
         // -- Fatigue floor --
         /// <summary>
         /// The normalized stamina value at which fatigue ends (HungerMaxStaHardFloor / 100).

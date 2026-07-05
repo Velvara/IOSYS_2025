@@ -918,6 +918,7 @@ namespace Game.Climbing
         private void BeginRelease()
         {
             if (_cameraOverridden) RestoreBracedReadyCamera();   // exiting from a peek → hand the camera back
+            _stamina?.SetPendingStaminaCost(0f);                 // a Cancel-exit from the peek never pays the cost
             _releasing = true;
             _masterWeightTarget = 0f;
             _regrabCooldownTimer = regrabCooldown;
@@ -949,6 +950,7 @@ namespace Game.Climbing
             if (_animator != null && _climbLayerIndex >= 0) _animator.SetLayerWeight(_climbLayerIndex, 0f);
             if (_animator != null && _climbLegsLayerIndex >= 0) _animator.SetLayerWeight(_climbLegsLayerIndex, 0f);
             _stamina?.SetClimbState(false, false);
+            _stamina?.SetPendingStaminaCost(0f);      // safety: no exit path may leave the preview flashing
             _controlLock?.ReleaseExternalControl();   // FSM hands control back to Jump/Move/Idle
             if (ik != null) ik.enabled = false;       // solver back to sleep until the next grab
             if (logClimbEvents) Debug.Log("[ClimbController] Released — control returned.");

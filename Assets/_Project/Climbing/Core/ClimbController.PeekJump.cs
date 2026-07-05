@@ -30,6 +30,9 @@ namespace Game.Climbing
             _pendingSwap = false;
             _pendulumFrozen = true;
             _pendulum?.Reset(_rig.HandAverage);   // settle the pendulum so the body holds still
+            // Announce the jump cost: the stamina bar flashes the chunk that WOULD be spent.
+            // Nothing drains here — it's only paid if the jump actually fires (BeginClimbJump).
+            _stamina?.SetPendingStaminaCost(_stamina.ClimbJumpStaminaCost);
             SnapshotBracedReadyCamera();          // compute the arc + freeze the rig + engage the arc camera
             if (logClimbEvents) Debug.Log($"[ClimbController] BracedReady — releasing {(releaseLeft ? "LEFT" : "RIGHT")} hand.");
         }
@@ -101,6 +104,7 @@ namespace Game.Climbing
                     _mode = ClimbMode.Climbing;
                     _readyReturning = false;
                     _pendulumFrozen = false;
+                    _stamina?.SetPendingStaminaCost(0f);   // backed out — the announced cost is never paid
                 }
             }
         }
@@ -319,6 +323,13 @@ namespace Game.Climbing
             _jumpTimer = 0f;
             _pendingSwap = false;
             _readyReturning = false;
+            // Pay the announced jump cost (clamped at zero — an empty bar still jumps, but lands
+            // fatigued) and stop the HUD preview flash.
+            if (_stamina != null)
+            {
+                _stamina.SpendStamina(_stamina.ClimbJumpStaminaCost);
+                _stamina.SetPendingStaminaCost(0f);
+            }
             // Use the wall-perpendicular direction captured (squared, pre-turn) at BracedReady enter — so the
             // body's peek turn never inclines the launch. Recompute only if it's somehow unset.
             _jumpOutwardDir = _bracedReadyJumpDir.sqrMagnitude > 1e-4f ? _bracedReadyJumpDir : ComputeWallOutward();
@@ -374,6 +385,7 @@ namespace Game.Climbing
             _isClimbing = false;       // motor drives + grab/catch detection re-enables; the hold runs in Update
             _jumpAirborne = true;      // hold ClimbJump's last frame + camera until land / catch / fall
             _stamina?.SetClimbState(false, false);
+            _stamina?.HoldStaminaUntilGrounded();   // no regen mid-arc — resumes on landing or reattach
             // Turn 180° to face the jump direction over jumpTurnDuration; reattach is blocked until it completes.
             _jumpTurnFrom = transform.rotation;
             _jumpTurnTo = _jumpOutwardDir.sqrMagnitude > 1e-4f

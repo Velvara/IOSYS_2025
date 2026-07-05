@@ -15,6 +15,8 @@ namespace StarterAssets
     ///                                 OR (1 - EffectiveMaxValue) to 1 (counterclockwise)
     ///                                 controlled by EffectiveMaxCounterClockwise
     ///   5. Fill (bright color)        0 to Value
+    ///   5b. Cost preview chunk        (Value - CostPreviewValue) to Value — the top slice of the
+    ///                                 fill, flashed by the controller to announce a pending spend
     ///   6. Marker line                MarkerValue to MarkerValue + (MarkerThicknessPoints / 100)
     ///
     /// EFFECTIVEMAX COUNTERCLOCKWISE
@@ -126,6 +128,21 @@ namespace StarterAssets
             set { _ringThickness = Mathf.Max(1f, value); MarkDirtyRepaint(); }
         }
 
+        // -- Cost preview chunk (the top slice of the fill an announced action would spend) --
+        [UxmlAttribute]
+        public float CostPreviewValue
+        {
+            get => _costPreviewValue;
+            set { _costPreviewValue = Mathf.Clamp01(value); MarkDirtyRepaint(); }
+        }
+
+        [UxmlAttribute]
+        public Color CostPreviewColor
+        {
+            get => _costPreviewColor;
+            set { _costPreviewColor = value; MarkDirtyRepaint(); }
+        }
+
         // -- Marker line --
         [UxmlAttribute]
         public float MarkerValue
@@ -156,6 +173,7 @@ namespace StarterAssets
         private float _ringThickness               = 8f;
         private float _markerValue                 = -1f;
         private float _markerThicknessPoints       = 2f;
+        private float _costPreviewValue            = 0f;
         private bool  _effectiveMaxCounterClockwise = false;
 
         private Color _fillColor          = new Color(0.2f, 0.8f, 0.2f, 1f);
@@ -164,6 +182,7 @@ namespace StarterAssets
         private Color _trackColor         = new Color(0.15f, 0.15f, 0.15f, 0.8f);
         private Color _penaltyColor       = new Color(0.9f, 0.1f, 0.1f, 1f);
         private Color _markerColor        = Color.white;
+        private Color _costPreviewColor   = new Color(1f, 0.85f, 0.2f, 1f);
 
         // -- Constructor --
         public RadialBar()
@@ -257,6 +276,17 @@ namespace StarterAssets
                 painter.strokeColor = _fillColor;
                 painter.BeginPath();
                 painter.Arc(center, radius, startAngle, fillEnd);
+                painter.Stroke();
+            }
+
+            // -- Layer 5b: Cost preview chunk (the top slice of the fill; flashed by the controller) --
+            if (_costPreviewValue > 0f && _value > 0f)
+            {
+                float chunkStart = startAngle + fullArc * Mathf.Max(0f, _value - _costPreviewValue);
+                float chunkEnd   = startAngle + fullArc * _value;
+                painter.strokeColor = _costPreviewColor;
+                painter.BeginPath();
+                painter.Arc(center, radius, chunkStart, chunkEnd);
                 painter.Stroke();
             }
 

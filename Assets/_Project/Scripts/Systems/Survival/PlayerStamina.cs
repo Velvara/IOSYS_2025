@@ -5,7 +5,7 @@ namespace Game.PlayerV2.Systems
     /// <summary>
     /// Self-contained stamina, thirst, and hunger system.
     /// Lives on the same GameObject as ThirdPersonController.
-    /// The controller calls Tick(isSprinting) once per Update and reads back
+    /// The controller calls Tick(isSprinting, isGrounded) once per Update and reads back
     /// IsFatigued / CurrentStamina. Nothing else couples the two scripts,
     /// so this component can be swapped or disabled without touching the controller.
     ///
@@ -108,6 +108,11 @@ namespace Game.PlayerV2.Systems
                  "No drain while hanging still; no recovery while climbing. ~25 /s")]
         public float ClimbDrainRate = 25f;
 
+        [Tooltip("Stamina chunk spent by a climb jump-off (Jump from BracedReady). Previewed as the " +
+                 "flashing chunk on the stamina bar while peeking; only paid if the jump actually fires " +
+                 "(clamped at zero — an empty bar still jumps, but lands fatigued).")]
+        public float ClimbJumpStaminaCost = 15f;
+
         // -- Debug drain rates --
         [Header("Debug Drain Rates")]
         [Tooltip("Stamina drained per second by DEBUG_J. ~50 /s")]
@@ -142,6 +147,13 @@ namespace Game.PlayerV2.Systems
             HungerMaxPenaltyCap > 0f ? _hungerMaxPenalty / HungerMaxPenaltyCap : 0f;
 
         /// <summary>
+        /// The announced cost, clamped to what's actually available (spending clamps at zero) —
+        /// the HUD chunk never extends below the empty mark.
+        /// </summary>
+        public float NormalizedPendingCost =>
+            Mathf.Min(_pendingCost, _currentStamina) / BaseMaxStamina;
+
+        /// <summary>
         /// Normalized stamina threshold at which fatigue ends (HungerMaxStaHardFloor / 100).
         /// Drives the position of the marker line on the stamina HUD bar.
         /// </summary>
@@ -164,6 +176,8 @@ namespace Game.PlayerV2.Systems
         // -- Climbing state (set each frame by the climbing subsystem) --
         private bool _isClimbing;
         private bool _isMovingBetweenHolds;
+        private float _pendingCost;         // announced-but-unpaid cost, previewed on the HUD (points)
+        private bool _holdUntilGrounded;    // climb jump-off: freeze stamina until landed/reattached
 
         // -- Lifecycle --
 
@@ -178,15 +192,16 @@ namespace Game.PlayerV2.Systems
             _currentSessionPenalty      = 0f;
             _isFatigued                 = false;
             _isAccumulatingRestPenalty  = false;
+            _holdUntilGrounded          = false;
             _currentStaminaRecoveryRate = StaminaRecoveryRate;
         }
 
-        public void Tick(bool isSprinting)
+        public void Tick(bool isSprinting, bool isGrounded)
         {
             float dt = Time.deltaTime;
             UpdateCurrentRecoveryRate();
             TickPassiveDrain(dt);
-            TickStamina(isSprinting, dt);
+            TickStamina(isSprinting, isGrounded, dt);
             ClampAll();
         }
 
@@ -200,6 +215,32 @@ namespace Game.PlayerV2.Systems
         {
             _isClimbing = climbing;
             _isMovingBetweenHolds = movingBetweenHolds;
+            if (climbing) _holdUntilGrounded = false;   // reattached — the climb-jump hold is over
+        }
+
+        /// <summary>
+        /// Freezes stamina (no drain, no recovery) until the character next touches ground or
+        /// reattaches to a climb. Called at the climb jump-off launch so the arc doesn't quietly
+        /// regenerate before a reattach. Ordinary jumps and falls are unaffected.
+        /// </summary>
+        public void HoldStaminaUntilGrounded() => _holdUntilGrounded = true;
+
+        /// <summary>
+        /// Announces a cost the player is ABOUT to pay (0 clears it). Nothing is drained — the HUD
+        /// shows the chunk as a slow flashing slice at the top of the current stamina so the player
+        /// can judge the action (e.g. the climb jump-off while peeking in BracedReady).
+        /// </summary>
+        public void SetPendingStaminaCost(float points) => _pendingCost = Mathf.Max(0f, points);
+
+        /// <summary>
+        /// Spends a stamina chunk immediately (e.g. the climb jump-off firing). Clamps at zero;
+        /// hitting zero sets fatigue, same as any other drain.
+        /// </summary>
+        public void SpendStamina(float points)
+        {
+            if (points <= 0f) return;
+            _currentStamina = Mathf.Max(0f, _currentStamina - points);
+            if (_currentStamina <= 0f) _isFatigued = true;
         }
 
         private void UpdateCurrentRecoveryRate()
@@ -225,7 +266,7 @@ namespace Game.PlayerV2.Systems
             //   Holding breath (~30 /s): _currentStamina -= HoldBreathDrainRate * dt;
         }
 
-        private void TickStamina(bool isSprinting, float dt)
+        private void TickStamina(bool isSprinting, bool isGrounded, float dt)
         {
             // Climbing overrides sprint: drain only while moving between holds, and never recover
             // (fatigue clears only after leaving the wall). Reaching 0 sets fatigue → auto-tumble.
@@ -242,6 +283,16 @@ namespace Game.PlayerV2.Systems
                         _isFatigued = true;
                 }
                 return;
+            }
+
+            // Climb-jump hold: after a climb jump-off, stamina stays FROZEN (no drain, no recovery)
+            // until the character lands or reattaches (reattaching clears it via SetClimbState).
+            // Ordinary jumps/falls/bumps keep the original intent-based behavior — this latch is the
+            // ONLY airborne special-case.
+            if (_holdUntilGrounded)
+            {
+                if (!isGrounded) return;
+                _holdUntilGrounded = false;   // landed — normal rules resume this frame
             }
 
             if (isSprinting && !_isFatigued && _currentStamina > 0f)
