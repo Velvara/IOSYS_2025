@@ -20,15 +20,19 @@ namespace StarterAssets
 
         // -- Components --
         private SurvivalBarsController _survivalBars;
+        private ItemCarouselController _itemCarousel;
 
         // -- Lifecycle --
 
         private void Awake()
         {
             _survivalBars = GetComponent<SurvivalBarsController>();
+            _itemCarousel = GetComponent<ItemCarouselController>();
 
             if (_survivalBars == null)
                 Debug.LogWarning("HUDController: SurvivalBarsController not found on this GameObject.", this);
+            if (_itemCarousel == null)
+                Debug.LogWarning("HUDController: ItemCarouselController not found on this GameObject.", this);
         }
 
         private void Start()
@@ -62,6 +66,14 @@ namespace StarterAssets
 
             if (_survivalBars != null)
                 _survivalBars.Bind(staminaData);
+
+            var cycleItems = character.GetComponentInChildren<CycleItems>();
+
+            if (cycleItems == null)
+                Debug.LogWarning($"HUDController: {character.name} has no CycleItems component.", this);
+
+            if (_itemCarousel != null)
+                _itemCarousel.Bind(cycleItems);
         }
     }
 }

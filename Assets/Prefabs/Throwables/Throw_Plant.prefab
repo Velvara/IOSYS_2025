@@ -24,13 +24,17 @@ PrefabInstance:
       propertyPath: trunkPiecePrefab
       value: 
       objectReference: {fileID: 3178585012329739392, guid: 3ebac0159710998439c2a23588c08f9b, type: 3}
+    - target: {fileID: 3765411901084863943, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
+      propertyPath: explosionOriginator
+      value: 
+      objectReference: {fileID: 8802237323454406552, guid: 8e17b7f1292d84541a27057985dff891, type: 3}
     - target: {fileID: 4784618357346260175, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
       objectReference: {fileID: 2100000, guid: 5ccb771ec9f177b46a2a67bb623676f8, type: 2}
     - target: {fileID: 6365504129967856482, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
       propertyPath: m_Name
-      value: Plant_Throwable
+      value: Throw_Plant
       objectReference: {fileID: 0}
     - target: {fileID: 8126242627610425617, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
       propertyPath: m_LocalPosition.x
@@ -83,5 +87,26 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 6365504129967856482, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: -6397210713645004912}
   m_SourcePrefab: {fileID: 100100000, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
+--- !u!1 &7213741497304182012 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 6365504129967856482, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
+  m_PrefabInstance: {fileID: 4344438637275608990}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &-6397210713645004912
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7213741497304182012}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1238218967b6be54ea618c04de63d775, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Game.Tools::ItemIcon
+  icon: {fileID: 21300000, guid: 326e0659412ebc643a11822eba9dfaac, type: 3}

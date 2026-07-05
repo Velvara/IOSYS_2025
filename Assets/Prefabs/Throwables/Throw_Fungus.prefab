@@ -14,7 +14,7 @@ PrefabInstance:
       objectReference: {fileID: 2100000, guid: 89ed617897ffdbd4d923eb66c8882192, type: 2}
     - target: {fileID: 6365504129967856482, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
       propertyPath: m_Name
-      value: Fungus_Throwable
+      value: Throw_Fungus
       objectReference: {fileID: 0}
     - target: {fileID: 8126242627610425617, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
       propertyPath: m_LocalPosition.x
@@ -67,5 +67,26 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 6365504129967856482, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: -8575906758560500875}
   m_SourcePrefab: {fileID: 100100000, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
+--- !u!1 &6652060560857390141 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 6365504129967856482, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
+  m_PrefabInstance: {fileID: 289934145676527455}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &-8575906758560500875
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6652060560857390141}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1238218967b6be54ea618c04de63d775, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Game.Tools::ItemIcon
+  icon: {fileID: 21300000, guid: 3c0cfdbc257ee7543b9bf6988cf5620c, type: 3}

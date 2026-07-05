@@ -5,5 +5,11 @@
     xmlns:uie="UnityEditor.UIElements"
     xsi:noNamespaceSchemaLocation="../../../UIElementsSchema/UIElements.xsd"
 >
-    
+    <!-- HUD root: composes the widgets as templates. Each instance is an absolute full-screen
+         layer so every widget lays out exactly as it would as the document root (and they can
+         be edited independently in UI Builder via their own .uxml/.uss). -->
+    <ui:Template name="SurvivalBars" src="../Widgets/SurvivalBars/SurvivalBars.uxml"/>
+    <ui:Template name="ItemCarousel" src="../Widgets/ItemCarousel/ItemCarousel.uxml"/>
+    <ui:Instance template="SurvivalBars" picking-mode="Ignore" style="position: absolute; left: 0; top: 0; right: 0; bottom: 0;"/>
+    <ui:Instance template="ItemCarousel" picking-mode="Ignore" style="position: absolute; left: 0; top: 0; right: 0; bottom: 0;"/>
 </ui:UXML>

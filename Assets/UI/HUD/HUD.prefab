@@ -12,6 +12,7 @@ GameObject:
   - component: {fileID: 2246391758878584202}
   - component: {fileID: 668873366425590870}
   - component: {fileID: 8298814037327130152}
+  - component: {fileID: 7129558563923443379}
   m_Layer: 0
   m_Name: HUD
   m_TagString: Untagged
@@ -78,6 +79,11 @@ MonoBehaviour:
   StaminaRedNormalColor: {r: 0.7686275, g: 0, b: 0, a: 1}
   StaminaRedBlinkColor: {r: 1, g: 0.32887805, b: 0, a: 1}
   StaminaRedBlinkRate: 0.4
+  StaminaCostPreviewColor: {r: 1, g: 0.85, b: 0.2, a: 1}
+  StaminaCostPreviewBlinkColor: {r: 1, g: 1, b: 1, a: 1}
+  StaminaCostPreviewBlinkRate: 0.4
+  StaminaMarkerColor: {r: 1, g: 1, b: 1, a: 1}
+  StaminaMarkerThicknessPoints: 2
   ThirstFillColor: {r: 0.2, g: 0.7, b: 0.9, a: 1}
   ThirstTrackNormalColor: {r: 0.16078432, g: 0.23137257, b: 0.40000004, a: 0.8}
   ThirstEmptyColor: {r: 0.16078432, g: 0.23137257, b: 0.40000004, a: 1}
@@ -99,3 +105,25 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::StarterAssets.HUDController
   _playerObject: {fileID: 0}
+--- !u!114 &7129558563923443379
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7149006102653012096}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d7d22b5413cd9224da96a2d5b197e7fb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Game.UI::StarterAssets.ItemCarouselController
+  _document: {fileID: 0}
+  VisibleCount: 5
+  SlotSize: 56
+  CenterScale: 1.35
+  Spacing: 10
+  EdgeOpacity: 0.15
+  BottomMargin: 24
+  ShowCounts: 1
+  CountTextColor: {r: 1, g: 1, b: 1, a: 1}
+  CountBadgeColor: {r: 0, g: 0, b: 0, a: 0.6}

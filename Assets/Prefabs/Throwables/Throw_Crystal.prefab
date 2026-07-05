@@ -15,7 +15,7 @@ PrefabInstance:
     - target: {fileID: 3765411901084863943, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
       propertyPath: explosionOriginator
       value: 
-      objectReference: {fileID: 2029506367879290912, guid: 8e17b7f1292d84541a27057985dff891, type: 3}
+      objectReference: {fileID: 0}
     - target: {fileID: 4784618357346260175, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
@@ -75,5 +75,26 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 6365504129967856482, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 135833193987869898}
   m_SourcePrefab: {fileID: 100100000, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
+--- !u!1 &8906485622442567925 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 6365504129967856482, guid: 2f14844327ac9744ebb4bc7eda583742, type: 3}
+  m_PrefabInstance: {fileID: 2579684334018769815}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &135833193987869898
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8906485622442567925}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1238218967b6be54ea618c04de63d775, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Game.Tools::ItemIcon
+  icon: {fileID: 21300000, guid: c8a7607de26bd7c499436f76131fa185, type: 3}
