@@ -31,6 +31,10 @@ namespace Game.PlayerV2.States
         protected static bool IsFatigued(StateContext context) =>
             context.Stamina != null && context.Stamina.IsFatigued;
 
+        /// <summary>External restriction (rope hold/aim) blocks sprint entry.</summary>
+        protected static bool SprintRestricted(StateContext context) =>
+            context.Motor != null && context.Motor.SprintRestricted;
+
         public override void OnUpdate(float deltaTime)
         {
             base.OnUpdate(deltaTime);

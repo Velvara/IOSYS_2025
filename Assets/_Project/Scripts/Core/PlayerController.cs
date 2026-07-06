@@ -107,6 +107,9 @@ namespace Game.PlayerV2
         public void AddLaunchVelocity(Vector3 horizontalWorld, float decayRate) =>
             _motor?.AddLaunchVelocity(horizontalWorld, decayRate);
         public void SuppressAirControl(float seconds) => _motor?.SuppressAirControl(seconds);
+        public void SetMovementRestriction(float maxSpeed, bool blockSprint, bool blockJump) =>
+            _motor?.SetMovementRestriction(maxSpeed, blockSprint, blockJump);
+        public void ClearMovementRestriction() => _motor?.ClearMovementRestriction();
         public void PredictLaunchArc(Vector3 startPos, Vector3 horizontalVel, float horizontalDecay, float upVel,
                                      float stepDt, Vector3[] points) =>
             _motor?.PredictLaunchArc(startPos, horizontalVel, horizontalDecay, upVel, stepDt, points);
@@ -159,7 +162,8 @@ namespace Game.PlayerV2
                 bool wantsToSprint = _inputHandler.SprintHeld && !_inputHandler.AimHeld &&
                                      _inputHandler.HasMoveInput();
                 bool isSprinting = wantsToSprint && !_staminaSystem.IsFatigued &&
-                                   _staminaSystem.CurrentStamina > 0f;
+                                   _staminaSystem.CurrentStamina > 0f &&
+                                   (_motor == null || !_motor.SprintRestricted);
                 _staminaSystem.Tick(isSprinting, IsGrounded);
             }
 

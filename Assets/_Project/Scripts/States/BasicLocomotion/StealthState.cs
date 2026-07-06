@@ -22,7 +22,8 @@ namespace Game.PlayerV2.States
         {
             // Sprint cancels stealth.
             if (context.Input.SprintHeld && context.HasMoveInput() &&
-                !context.Input.AimHeld && HasStamina(context) && !IsFatigued(context))
+                !context.Input.AimHeld && HasStamina(context) && !IsFatigued(context) &&
+                !SprintRestricted(context))
                 return CharacterStateType.Sprint;
 
             // Toggled off → return to move/idle.

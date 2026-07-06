@@ -25,8 +25,23 @@ public class HookshotRope : MonoBehaviour
     private float currentAmplitude;
     private float elapsedTime;
     private bool hasHit = false;
+    private bool waveSettled = false;
 
     // ------------------------------------------------------------
+
+    /// <summary>Retargets the rope's far end (e.g. a placed rope switching between the
+    /// player's hands and a parked drop point). Start/end mesh setup is unchanged.</summary>
+    public void SetEnd(Transform newEnd)
+    {
+        end = newEnd;
+    }
+
+    /// <summary>Retargets the rope's start (e.g. the hand-to-hand segment following whichever
+    /// hand is currently higher on the rope).</summary>
+    public void SetStart(Transform newStart)
+    {
+        start = newStart;
+    }
 
     public void Init(Transform start, Transform end, int sides, float loopDist, float ropeWidth)
     {
@@ -60,6 +75,21 @@ public class HookshotRope : MonoBehaviour
         currentAmplitude = Mathf.MoveTowards(currentAmplitude, 0f, damping * Time.deltaTime);
 
         UpdateTransform();
+
+        // Once the wave has damped out (or was never enabled — static ropes), restore the
+        // base mesh once and stop deforming: no per-frame vertex writes for taut ropes.
+        if (currentAmplitude <= 0.0001f)
+        {
+            if (!waveSettled)
+            {
+                mesh.vertices = baseVertices;
+                mesh.RecalculateNormals();
+                waveSettled = true;
+            }
+            return;
+        }
+
+        waveSettled = false;
         ApplyWaveDeformation();
     }
 

@@ -30,6 +30,7 @@ public class AimManager : MonoBehaviour
     public ThrowAim throwAimMode;
     public ShootAim shootAimMode;
     public ScanAim scanAimMode;
+    public RopeAim ropeAimMode;
     public HookshotDragMode hookshotDragMode;
 
     // ===== Head & Hand IK =====
@@ -105,6 +106,7 @@ public class AimManager : MonoBehaviour
         if (throwAimMode != null) throwAimMode.playerInput = playerInput;
         if (shootAimMode != null) shootAimMode.playerInput = playerInput;
         if (scanAimMode != null) scanAimMode.playerInput = playerInput;
+        if (ropeAimMode != null) ropeAimMode.playerInput = playerInput;
 
         // Subscribe to Aim input
         var actions = playerInput.actions;
@@ -216,6 +218,7 @@ public class AimManager : MonoBehaviour
             if (newItem.GetComponent<ThrowableObject>() != null) newMode = throwAimMode;
             else if (newItem.GetComponent<ShootingTool>() != null) newMode = shootAimMode;
             else if (newItem.GetComponent<ScanTool>() != null) newMode = scanAimMode;
+            else if (newItem.GetComponent<RopeItem>() != null) newMode = ropeAimMode;
         }
 
         if (isAiming)
@@ -254,6 +257,7 @@ public class AimManager : MonoBehaviour
         if (item.GetComponent<ThrowableObject>() != null) { SetActiveMode(throwAimMode); return; }
         if (item.GetComponent<ShootingTool>() != null) { SetActiveMode(shootAimMode); return; }
         if (item.GetComponent<ScanTool>() != null) { SetActiveMode(scanAimMode); return; }
+        if (item.GetComponent<RopeItem>() != null) { SetActiveMode(ropeAimMode); return; }
 
         SetActiveMode(null);
     }

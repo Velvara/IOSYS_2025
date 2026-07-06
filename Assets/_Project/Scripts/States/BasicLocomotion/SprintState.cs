@@ -23,12 +23,14 @@ namespace Game.PlayerV2.States
             context.Input.SprintHeld &&
             !context.Input.AimHeld &&
             HasStamina(context) &&
-            !IsFatigued(context);
+            !IsFatigued(context) &&
+            !SprintRestricted(context);
 
         protected override CharacterStateType GetGroundedTransition(StateContext context)
         {
             // Stop sprinting if the button is released, aiming starts, or stamina runs out.
-            if (!context.Input.SprintHeld || context.Input.AimHeld || !HasStamina(context) || IsFatigued(context))
+            if (!context.Input.SprintHeld || context.Input.AimHeld || !HasStamina(context) ||
+                IsFatigued(context) || SprintRestricted(context))
                 return context.HasMoveInput() ? CharacterStateType.Move : CharacterStateType.Idle;
 
             if (!context.HasMoveInput())

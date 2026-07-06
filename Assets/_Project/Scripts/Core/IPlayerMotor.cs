@@ -39,6 +39,16 @@ namespace Game.PlayerV2
         void SuppressAirControl(float seconds);
 
         /// <summary>
+        /// Caps target movement speed and optionally blocks sprint/jump until
+        /// <see cref="ClearMovementRestriction"/> — e.g. while holding or aim-placing a rope.
+        /// Single active restriction (last caller wins); fatigue gating stacks independently.
+        /// </summary>
+        void SetMovementRestriction(float maxSpeed, bool blockSprint, bool blockJump);
+
+        /// <summary>Removes the restriction set by <see cref="SetMovementRestriction"/>.</summary>
+        void ClearMovementRestriction();
+
+        /// <summary>
         /// Predicts a decaying-launch + gravity arc (no air control), filling <paramref name="points"/> from
         /// <paramref name="startPos"/> using the motor's own integration + gravity — so a trajectory preview
         /// matches the real jump-off path.

@@ -81,6 +81,30 @@ namespace Game.PlayerV2
         /// <summary>If false, the character does not rotate to face movement (set by aim modes).</summary>
         public bool RotateOnMove { get; set; } = true;
 
+        // -- External movement restriction (e.g. holding/aiming the rope): caps target speed,
+        //    blocks sprint entry and jump. Single active restriction; fatigue stacks on top
+        //    (whichever cap is lower wins via the Min in MoveHorizontal + the state's fatigue speed).
+        private float _restrictedSpeedCap = -1f;   // < 0 = no cap
+        private bool _restrictSprint, _restrictJump;
+
+        /// <summary>True while an external restriction blocks sprinting (states gate Sprint entry on this).</summary>
+        public bool SprintRestricted => _restrictSprint;
+
+        /// <summary>Caps ground/air target speed and optionally blocks sprint/jump until cleared.</summary>
+        public void SetMovementRestriction(float maxSpeed, bool blockSprint, bool blockJump)
+        {
+            _restrictedSpeedCap = maxSpeed;
+            _restrictSprint = blockSprint;
+            _restrictJump = blockJump;
+        }
+
+        public void ClearMovementRestriction()
+        {
+            _restrictedSpeedCap = -1f;
+            _restrictSprint = false;
+            _restrictJump = false;
+        }
+
         public float RunSpeed => _cfg.RunSpeed;
         public float SprintSpeed => _cfg.SprintSpeed;
         public float StealthSpeed => _cfg.StealthSpeed;
@@ -88,8 +112,9 @@ namespace Game.PlayerV2
 
         public float VerticalVelocity => _verticalVelocity;
         public float CurrentSpeed => _speed;
-        /// <summary>True once the post-landing jump cooldown has elapsed.</summary>
-        public bool CanJump => _jumpTimeoutDelta <= 0f;
+        /// <summary>True once the post-landing jump cooldown has elapsed and no external
+        /// restriction (rope hold/aim) is blocking the jump.</summary>
+        public bool CanJump => _jumpTimeoutDelta <= 0f && !_restrictJump;
 
         public PlayerMotor(CharacterController controller, Transform transform, Animator animator,
                            Transform cameraTransform, MovementConfig config)
@@ -262,6 +287,8 @@ namespace Game.PlayerV2
         private void MoveHorizontal(Vector2 moveInput, float targetSpeed, bool ignoreStickScaling, float dt)
         {
             if (moveInput == Vector2.zero) targetSpeed = 0f;
+            if (_restrictedSpeedCap >= 0f && targetSpeed > _restrictedSpeedCap)
+                targetSpeed = _restrictedSpeedCap;
 
             // Measure only the INPUT-driven part of the controller's velocity:
             //  - subtract the launch velocity (it's additive in ApplyMove; leaving it in would feed the

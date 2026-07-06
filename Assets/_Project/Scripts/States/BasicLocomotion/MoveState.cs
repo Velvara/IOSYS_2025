@@ -17,7 +17,8 @@ namespace Game.PlayerV2.States
 
         protected override CharacterStateType GetGroundedTransition(StateContext context)
         {
-            if (context.Input.SprintHeld && !context.Input.AimHeld && HasStamina(context) && !IsFatigued(context))
+            if (context.Input.SprintHeld && !context.Input.AimHeld && HasStamina(context) &&
+                !IsFatigued(context) && !SprintRestricted(context))
                 return CharacterStateType.Sprint;
 
             if (context.Input.StealthToggled)
