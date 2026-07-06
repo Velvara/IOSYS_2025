@@ -131,6 +131,12 @@ MonoBehaviour:
   ropeMaterial: {fileID: 2100000, guid: 04c2baec052854a41a442710a795d86a, type: 2}
   ropeCylinderSides: 8
   ropeWidth: 0.03
+  handSwapHysteresis: 0.06
+  tailParticles: 72
+  dropSettleSeconds: 2.5
+  tailCollisionMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
 --- !u!4 &7823324552158713075 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: efa30830c5b46234a9601b632d567f0d, type: 3}

@@ -45,6 +45,11 @@ public class RopeAim : AimModeBase
     private Vector3 placementPoint;
     private Quaternion placementRotation = Quaternion.identity;
 
+    // The radial ledge search costs ~100 rays — cache it and re-run only when the preview moves.
+    private bool ledgeCheckDone;
+    private bool ledgeCheckResult;
+    private Vector3 ledgeCheckPos;
+
     /// <summary>Current probe result — read on the Use press to place the anchor.</summary>
     public bool PlacementValid => placementValid;
     public Vector3 PlacementPoint => placementPoint;
@@ -82,6 +87,7 @@ public class RopeAim : AimModeBase
 
         heldHandler.SpawnHeldItem();
         EnsurePreviewInstance();
+        ledgeCheckDone = false;   // fresh session — re-validate the ledge at the first preview spot
         UpdatePreview();
     }
 
@@ -187,6 +193,19 @@ public class RopeAim : AimModeBase
             placementValid = layerOk
                              && heightDelta <= maxHeightAbove
                              && heightDelta >= -maxDepthBelow;
+
+            // Anchors only make sense next to a rappel-able ledge now — placement leads straight
+            // into the wall rappel. Search radius/probes live on RopeController.
+            if (placementValid && ropeController != null)
+            {
+                if (!ledgeCheckDone || (hit.point - ledgeCheckPos).sqrMagnitude > 0.04f)
+                {
+                    ledgeCheckResult = ropeController.FindNearestRappelLedge(hit.point, out _);
+                    ledgeCheckPos = hit.point;
+                    ledgeCheckDone = true;
+                }
+                placementValid &= ledgeCheckResult;
+            }
 
             placementRotation = Quaternion.LookRotation(forward, Vector3.up);
             previewInstance.transform.SetPositionAndRotation(hit.point, placementRotation);

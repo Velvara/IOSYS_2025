@@ -194,4 +194,14 @@ public class HookshotRope : MonoBehaviour
     {
         hasHit = true;
     }
+
+    /// <summary>Re-excites the damped wave — e.g. the organic wobble when a dropped rope's
+    /// end falls to rest. Damps out on its own, then the mesh settles static again.</summary>
+    public void Nudge(float amplitude)
+    {
+        currentAmplitude = Mathf.Max(currentAmplitude, amplitude);
+        hasHit = false;
+        waveSettled = false;
+        elapsedTime = 0f;
+    }
 }
