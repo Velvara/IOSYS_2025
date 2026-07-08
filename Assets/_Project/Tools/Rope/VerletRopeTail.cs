@@ -20,6 +20,11 @@ public class VerletRopeTail : MonoBehaviour
     public float particleRadius = 0.05f;
     public LayerMask collisionMask = ~0;
     [Range(0f, 1f)] public float contactFriction = 0.6f;
+    [Tooltip("How strongly the strand is pulled back toward hanging STRAIGHT DOWN under its pin (per " +
+             "second), weighted toward the free tip — as if a weight hung on the end. Keeps a tail that " +
+             "brushes geometry from drifting away without bound; it drapes and settles downward instead. " +
+             "0 = pure verlet (may creep along surfaces forever).")]
+    public float hangReturn = 2f;
 
     [Header("Rendering")]
     public int sides = 6;
@@ -175,6 +180,22 @@ public class VerletRopeTail : MonoBehaviour
                 positions[i + 1] -= offset;
             }
             positions[0] = pin.position;
+        }
+
+        // "Weight on the tip": spring each particle toward the vertical plumb line under the pin,
+        // stronger toward the free end. This restores the tail toward hanging straight down and
+        // cancels the outward velocity a collision pushout imparts — so a tail that touches
+        // something drapes and settles downward instead of drifting away without bound.
+        if (hangReturn > 0f)
+        {
+            Vector3 plumb = positions[0];
+            float k = 1f - Mathf.Exp(-hangReturn * dt);
+            for (int i = 1; i < n; i++)
+            {
+                float w = k * (i / (float)(n - 1));   // 0 at the pin → full at the tip
+                positions[i].x = Mathf.Lerp(positions[i].x, plumb.x, w);
+                positions[i].z = Mathf.Lerp(positions[i].z, plumb.z, w);
+            }
         }
 
         // One pushout pass per frame is plenty for a slack strand (it piles rather than presses).

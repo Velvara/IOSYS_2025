@@ -1,6 +1,7 @@
 using System.Collections;
 using Game.Climbing;
 using Game.PlayerV2;
+using Game.PlayerV2.Systems;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -30,6 +31,12 @@ public class RopeController : MonoBehaviour
     [Tooltip("Optional second hand slot: when assigned, the rope runs anchor → hold point → over " +
              "this hand as a second segment.")]
     public Transform ropeHoldPointSecondary;
+    [Tooltip("Optional extra rope hold BETWEEN THE FEET, used only in the RopeAlone free-hang pose: " +
+             "the rope runs hands → this point → dangling tail, so it reads as passing between the " +
+             "legs (abseil). Leave empty to disable.")]
+    public Transform ropeFreeHangHold;
+    [Tooltip("Toggle the between-feet free-hang hold without unassigning it.")]
+    public bool useFreeHangHold = true;
 
     [Header("Holding (RopeHold state)")]
     [Tooltip("Walk speed cap while aim-placing or holding the rope (sprint and jump are blocked too).")]
@@ -40,6 +47,15 @@ public class RopeController : MonoBehaviour
     public float clampSlack = 0.05f;
     [Tooltip("Max distance from a parked rope at which Use re-grabs it (nearest rope point).")]
     public float regrabDistance = 1.5f;
+    [Tooltip("If a re-grabbed rope has no wall to rappel but its overhead attachment (ledge pivot / " +
+             "anchor) sits at least this far above the player, the grab enters RopeAlone free-hang " +
+             "instead of the ground RopeHold — i.e. grabbing a rope that dangles from above.")]
+    public float freeHangGrabMinRise = 1f;
+    [Tooltip("A grab that would START A RAPPEL is only allowed if the rope's ANCHOR (measured at the " +
+             "player's height) lies within this horizontal radius of the player — otherwise the rope is " +
+             "too far from the wall and grabbing would leave the player rappelling in mid-air. Out of " +
+             "range = the grab is flagged invalid (see IsGrabInvalid) and refused. Pure distance, no raycast.")]
+    public float grabAnchorHorizontalRadius = 0.75f;
 
     [Header("Ledge → Rappel")]
     [Tooltip("How far ahead of the feet the ledge probe looks while walking with the rope.")]
@@ -72,6 +88,11 @@ public class RopeController : MonoBehaviour
     public bool IsHolding => currentAnchor != null && currentAnchor.IsHeld;
     public RopeAnchor CurrentAnchor => currentAnchor;
 
+    /// <summary>True when the last grab attempt was REFUSED because the rope's anchor was outside
+    /// <see cref="grabAnchorHorizontalRadius"/> (too far from the wall — grabbing would rappel in
+    /// mid-air). Cleared on the next valid grab. Exposed for a future HUD "invalid grab" indicator.</summary>
+    public bool IsGrabInvalid { get; private set; }
+
     /// <summary>
     /// Rope paid out from the anchor to the player's grip: straight distance at placement,
     /// arc length at the grab point on a re-grab. The rappel increment extends this as the
@@ -90,7 +111,9 @@ public class RopeController : MonoBehaviour
     private IPlayerMotor motor;
     private IControlLock controlLock;
     private InputHandler input;
+    private PlayerStamina stamina;   // grabbing a rope is refused while fatigued
     private RappelController rappel;
+    private ClimbController climb;   // Use-near-a-rope while climbing hands the body off into rappel
     private bool wasAiming;
     private bool restrictionActive;
     private Vector3 worldMoveDir;   // set by WriteStrafeParams, read by the ledge probe
@@ -111,6 +134,9 @@ public class RopeController : MonoBehaviour
         motor = GetComponentInParent<IPlayerMotor>();
         controlLock = GetComponentInParent<IControlLock>();
         input = GetComponentInParent<InputHandler>();
+        stamina = GetComponentInParent<PlayerStamina>();
+
+        climb = GetComponentInParent<ClimbController>();
 
         rappel = GetComponentInParent<RappelController>();
         if (rappel != null)
@@ -119,6 +145,8 @@ public class RopeController : MonoBehaviour
             // Top-out exits to BASIC LOCOMOTION (rope dropped) — restore the idle upper body
             // while the climb layer still covers it, so the getup fade reveals the right pose.
             rappel.OnTopOutSettling += HandleTopOutSettling;
+            // Route the rope through the between-feet hold only while free-hanging (RopeAlone).
+            rappel.OnFreeHangChanged += HandleFreeHangChanged;
         }
 
         // Persistent subscription (unlike aim modes, holding isn't entered via EnterMode);
@@ -270,7 +298,8 @@ public class RopeController : MonoBehaviour
             // player's feet the top-surface height. Rope now runs anchor → pivot → hands.
             Vector3 lip = new Vector3(wall.point.x, feet.y, wall.point.z) + Vector3.up * ledgePivotHeight;
             currentAnchor.SetWaypoint(lip, ledgePivotPrefab);
-            currentAnchor.SetRappelEntry(wall.point, wall.normal);   // top-side re-grabs replay this
+            // Save the wall point, orientation AND standoff so a later re-grab rappels identically.
+            currentAnchor.SetRappelEntry(wall.point, wall.normal, rappel.bodyWallDistance);
             currentAnchor.SetOnWall(true);                            // on the wall now — reveal the tail
         }
     }
@@ -387,7 +416,23 @@ public class RopeController : MonoBehaviour
         {
             rappel.OnRappelExited -= HandleRappelExited;
             rappel.OnTopOutSettling -= HandleTopOutSettling;
+            rappel.OnFreeHangChanged -= HandleFreeHangChanged;
         }
+    }
+
+    /// <summary>The rappel controller entered/left the RopeAlone free-hang pose: route the held rope
+    /// through the between-feet hold while hanging (so the remainder dangles between the legs,
+    /// abseil-style), straight from the hands otherwise.</summary>
+    private void HandleFreeHangChanged(bool active)
+    {
+        if (currentAnchor == null) return;
+        bool on = active && useFreeHangHold && ropeFreeHangHold != null;
+        currentAnchor.SetFreeHangHold(on ? ropeFreeHangHold : null);
+
+        // Capture the hang line the FIRST time this rope free-hangs (the natural wall→rope-alone
+        // transition, or a ground grab). A later below-grab replays it so the hang distance matches.
+        if (active && rappel != null && !currentAnchor.HasFreeHangEntry)
+            currentAnchor.SetFreeHangEntry(rappel.FreeHangPoint, rappel.FreeHangNormal, rappel.FreeHangDistance);
     }
 
     /// <summary>Under the still-opaque climb layer at the end of a top-out: prep plain
@@ -471,7 +516,8 @@ public class RopeController : MonoBehaviour
             FindNearestRappelLedge(currentAnchor.StartPoint, out LedgeHit ledge))
         {
             currentAnchor.SetWaypoint(ledge.LipPoint + Vector3.up * ledgePivotHeight, ledgePivotPrefab);
-            currentAnchor.SetRappelEntry(ledge.WallPoint, ledge.WallNormal);   // top-side re-grabs replay this
+            // Save wall point, orientation AND standoff so a later re-grab rappels identically.
+            currentAnchor.SetRappelEntry(ledge.WallPoint, ledge.WallNormal, rappel.bodyWallDistance);
             rappelStarted = rappel.BeginRappel(new RappelStart
             {
                 WallPoint = ledge.WallPoint,
@@ -554,46 +600,101 @@ public class RopeController : MonoBehaviour
         if (motor != null && !aiming) motor.RotateOnMove = true;
     }
 
-    /// <summary>Use in locomotion near a parked rope: grab it at its nearest point.</summary>
+    /// <summary>Use in locomotion near a parked rope: grab it at its nearest point → wall rappel, free-hang,
+    /// or (a ground-level rope with nothing overhead) the walk-around RopeHold.</summary>
     private void TryRegrabNearestRope()
     {
         if (regrabBlockTimer > 0f) return;
+        if (stamina != null && stamina.IsFatigued) return;   // too tired to grab a rope
         if (motor == null || !motor.Controller.isGrounded) return;
 
-        Vector3 pos = motor.Transform.position;
+        RopeAnchor best = FindNearestRope(motor.Transform.position, out float along, out Vector3 point);
+        if (best == null) return;
+
+        // Decide the rappel from geometry BEFORE attaching, so an invalid grab is refused cleanly.
+        RappelStart start = default;
+        bool freeHang = false;
+        bool rappelApplies = rappel != null && ComputeRappelStart(best, point, out start, out freeHang);
+
+        // A rappel grab is only valid if the anchor is roughly overhead — else the rope is too far
+        // from the wall and grabbing would rappel in mid-air. Flag invalid and refuse (RopeHold grabs
+        // of a ground-level rope are unaffected — no rappel applies there).
+        if (rappelApplies && !AnchorWithinGrabRadius(best))
+        {
+            IsGrabInvalid = true;
+            return;
+        }
+        IsGrabInvalid = false;
+
+        currentAnchor = best;
+        best.AttachTo(HoldPoint, ropeHoldPointSecondary);
+        CurrentRopeExtension = along;   // grab length = arc distance to the grab point
+
+        if (rappelApplies && StartRappel(start, freeHang))
+        {
+            best.SetOnWall(true);   // on the wall / hanging — reveal the organic tail
+            return;
+        }
+
+        EnterHoldPose();
+        best.SetOnWall(false);   // grabbed onto flat ground / no wall — no dangling tail while held
+        if (motor != null) motor.RotateOnMove = false;
+    }
+
+    /// <summary>The rope's anchor, measured at the player's height, lies within
+    /// <see cref="grabAnchorHorizontalRadius"/> horizontally — i.e. the rope hangs close enough to the
+    /// player to grab into a rappel without swinging them into mid-air. Pure distance, no physics.</summary>
+    private bool AnchorWithinGrabRadius(RopeAnchor anchor)
+    {
+        if (motor == null) return true;
+        Vector3 a = anchor.StartPoint;
+        Vector3 p = motor.Transform.position;
+        float dx = a.x - p.x;
+        float dz = a.z - p.z;
+        return dx * dx + dz * dz <= grabAnchorHorizontalRadius * grabAnchorHorizontalRadius;
+    }
+
+    /// <summary>Nearest un-held parked rope within regrabDistance of <paramref name="pos"/>, plus the
+    /// nearest world point on it and the arc length to that point.</summary>
+    private RopeAnchor FindNearestRope(Vector3 pos, out float along, out Vector3 point)
+    {
+        along = 0f;
+        point = pos;
         RopeAnchor best = null;
         float bestDist = regrabDistance;
-        float bestAlong = 0f;
-        Vector3 bestPoint = pos;
 
         for (int i = 0; i < RopeAnchor.Placed.Count; i++)
         {
             RopeAnchor anchor = RopeAnchor.Placed[i];
             if (anchor == null || anchor.IsHeld) continue;
 
-            Vector3 nearest = anchor.NearestPointOnRope(pos, out float along);
+            Vector3 nearest = anchor.NearestPointOnRope(pos, out float a);
             float dist = Vector3.Distance(pos, nearest);
             if (dist < bestDist)
             {
                 bestDist = dist;
                 best = anchor;
-                bestAlong = along;
-                bestPoint = nearest;
+                along = a;
+                point = nearest;
             }
         }
+        return best;
+    }
 
-        if (best == null) return;
+    /// <summary>
+    /// Decides how grabbing <paramref name="best"/> at <paramref name="grabPoint"/> enters a rappel — pure
+    /// geometry, no takeover (so a caller can validate before dropping a climb). Returns false when neither
+    /// a wall rappel nor a free-hang applies (a ground-level rope → the caller uses RopeHold).
+    ///   • Wall rappel: TOP side replays the lip entry; below the lip probes the wall at the grab point.
+    ///   • Free-hang: no wall, but the overhead attachment sits above the player → hang on the rope.
+    /// </summary>
+    private bool ComputeRappelStart(RopeAnchor best, Vector3 grabPoint, out RappelStart start, out bool freeHang)
+    {
+        start = default;
+        freeHang = false;
+        if (motor == null) return false;
 
-        currentAnchor = best;
-        best.AttachTo(HoldPoint, ropeHoldPointSecondary);
-        CurrentRopeExtension = bestAlong;   // grab length = arc distance to the grab point
-
-        // Grab a rope on its rappel wall → straight onto the wall, always oriented so UP leads to
-        // the anchor. Two entry points, both aligned to the anchor at the top:
-        //   • TOP side (at/above the lip): replay the original lip entry (mirror of placement).
-        //   • BELOW the lip: enter on the wall AT THE GRAB POINT (the tail hangs against the face),
-        //     so the enter blend clips them straight onto the wall instead of gliding up to the lip.
-        if (rappel != null && best.HasRappelEntry && motor != null)
+        if (best.HasRappelEntry)
         {
             bool topSide = best.WaypointPosition is Vector3 lip &&
                            motor.Transform.position.y >= lip.y - 0.75f;
@@ -608,37 +709,89 @@ public class RopeController : MonoBehaviour
             }
             else
             {
-                haveEntry = ResolveWallAtGrab(bestPoint, best.RappelWallNormal, out wallPoint, out wallNormal);
+                // Fresh wall POINT at the grab height, but reuse the SAVED orientation so the re-grab
+                // rappels at the same facing the rope was placed with (dev request).
+                haveEntry = ResolveWallAtGrab(grabPoint, best.RappelWallNormal, out wallPoint, out _);
+                wallNormal = best.RappelWallNormal;
             }
 
             if (haveEntry)
             {
-                bool started = rappel.BeginRappel(new RappelStart
+                start = new RappelStart
                 {
                     WallPoint = wallPoint,
                     WallNormal = wallNormal,
                     AnchorPoint = best.StartPoint,
-                    RopeLength = best.RopeLength
-                });
-                if (started)
-                {
-                    best.SetOnWall(true);   // body is on the wall — reveal the organic tail
-                    return;
-                }
+                    RopeLength = best.RopeLength,
+                    WallDistance = best.RappelBodyDistance   // rappel at the saved standoff
+                };
+                freeHang = false;
+                return true;
             }
         }
 
-        EnterHoldPose();
-        best.SetOnWall(false);   // grabbed onto flat ground / no wall — no dangling tail while held
-        if (motor != null) motor.RotateOnMove = false;
+        // No wall — but if the rope hangs from above (overhead pivot/anchor higher than the player),
+        // grab it and free-hang. Reeling up can still re-contact a wall and resume wall rappel.
+        Vector3 overhead = best.WaypointPosition is Vector3 pivot ? pivot : best.StartPoint;
+        if (overhead.y > motor.Transform.position.y + freeHangGrabMinRise)
+        {
+            if (best.HasFreeHangEntry)
+            {
+                // Replay the stored hang line so the body hangs at the SAME distance from the wall as the
+                // original wall→rope-alone transition (BeginFreeHang keeps the current Y, uses the XZ).
+                start = new RappelStart
+                {
+                    WallPoint = best.FreeHangPoint,
+                    WallNormal = best.FreeHangNormal,
+                    AnchorPoint = best.StartPoint,
+                    RopeLength = best.RopeLength,
+                    WallDistance = best.FreeHangDistance
+                };
+            }
+            else
+            {
+                Vector3 hangNormal;
+                if (best.HasRappelEntry)
+                {
+                    hangNormal = best.RappelWallNormal;   // real wall orientation, so a reel-up re-contacts it
+                }
+                else
+                {
+                    Vector3 toAnchor = best.StartPoint - motor.Transform.position;
+                    toAnchor.y = 0f;
+                    hangNormal = toAnchor.sqrMagnitude > 0.01f ? -toAnchor.normalized : motor.Transform.forward;
+                }
+
+                start = new RappelStart
+                {
+                    WallPoint = grabPoint,        // grab point on the rope = the vertical hang line
+                    WallNormal = hangNormal,
+                    AnchorPoint = best.StartPoint,
+                    RopeLength = best.RopeLength,
+                    WallDistance = best.RappelBodyDistance   // used if a reel-up re-contacts the wall
+                };
+            }
+            freeHang = true;
+            return true;
+        }
+
+        return false;
     }
 
+    /// <summary>Executes the rappel decided by <see cref="ComputeRappelStart"/>. Requires external control
+    /// to be free (the caller releases any climb first).</summary>
+    private bool StartRappel(in RappelStart start, bool freeHang) =>
+        freeHang ? rappel.BeginFreeHang(start) : rappel.BeginRappel(start);
+
     /// <summary>Resolves the wall face for a below-the-lip re-grab. The grab point sits on the tail,
-    /// which drapes against the wall, so we re-probe just off it for an accurate normal and fall
-    /// back to the grab point + the rope's stored normal if the ray misses (the rope is demonstrably
-    /// on the wall there). Lets a bottom/mid grab drop onto the face where the player actually is.</summary>
+    /// which drapes against the wall, so we probe just off it (using the rope's stored normal for
+    /// orientation) and cast back into the face. Returns false when there's genuinely no wall there —
+    /// the caller then falls through to a free-hang grab (a rope dangling in open air).</summary>
     private bool ResolveWallAtGrab(Vector3 grabPoint, Vector3 storedWallNormal, out Vector3 wallPoint, out Vector3 wallNormal)
     {
+        wallPoint = default;
+        wallNormal = default;
+
         Vector3 n = storedWallNormal.sqrMagnitude > 0.0001f ? storedWallNormal.normalized : Vector3.forward;
         int mask = rappelSurfaceMask & ~(1 << motor.Transform.gameObject.layer);
 
@@ -650,11 +803,7 @@ public class RopeController : MonoBehaviour
             wallNormal = hit.normal;
             return true;
         }
-
-        // Ray missed (curved face / thin overhang) — trust the rope: it hangs on the wall here.
-        wallPoint = grabPoint;
-        wallNormal = n;
-        return true;
+        return false;
     }
 
     private Transform HoldPoint =>
@@ -667,9 +816,60 @@ public class RopeController : MonoBehaviour
         // While aiming, Use belongs to the active aim mode (throw/place/fire).
         if (IsPlacing) return;
         if (aimManager != null && aimManager.IsAiming) return;
-        if (controlLock != null && controlLock.IsExternalControlActive) return;
+
+        if (controlLock != null && controlLock.IsExternalControlActive)
+        {
+            // One exception to the external-control block: while CLIMBING, Use near a rope hands the
+            // body off from the climb into rappel (wall or free-hang). Any other external control
+            // (rappel itself, cutscene) still owns Use.
+            if (climb != null && climb.IsClimbing && !IsHolding)
+                TryGrabRopeFromClimb();
+            return;
+        }
 
         if (IsHolding) DropRope();
         else TryRegrabNearestRope();
+    }
+
+    /// <summary>Climbing a wall and pressing Use near a rope: if a rappel (wall or free-hang) would
+    /// apply on that rope, release the climb and take the body over into it. If no rope is near or
+    /// none applies, the climb is left untouched (we don't drop the player for nothing).</summary>
+    private void TryGrabRopeFromClimb()
+    {
+        if (rappel == null || motor == null) return;
+        if (stamina != null && stamina.IsFatigued) return;   // too tired to grab a rope
+
+        RopeAnchor best = FindNearestRope(motor.Transform.position, out float along, out Vector3 point);
+        if (best == null) return;
+
+        // Decide the rappel FIRST (pure geometry, no takeover) so we only drop the climb if it applies.
+        if (!ComputeRappelStart(best, point, out RappelStart start, out bool freeHang)) return;
+
+        // Too far from the wall to grab into a rappel → flag invalid and stay climbing (no mid-air rappel).
+        if (!AnchorWithinGrabRadius(best))
+        {
+            IsGrabInvalid = true;
+            return;
+        }
+        IsGrabInvalid = false;
+
+        // Hand off: release the climb (control returned this frame) so the rappel can take it, then start.
+        if (!climb.ReleaseForHandoff()) return;
+
+        currentAnchor = best;
+        best.AttachTo(HoldPoint, ropeHoldPointSecondary);
+        CurrentRopeExtension = along;
+
+        if (StartRappel(start, freeHang))
+        {
+            best.SetOnWall(true);
+            return;
+        }
+
+        // Rappel refused after the release (shouldn't happen — geometry already validated): fall back to
+        // a hold rather than leaving the player in limbo.
+        EnterHoldPose();
+        best.SetOnWall(false);
+        if (motor != null) motor.RotateOnMove = false;
     }
 }

@@ -26,6 +26,7 @@ namespace Game.Climbing
         public Vector3 WallNormal;   // wall face normal (points away from the wall)
         public Vector3 AnchorPoint;  // rope anchor (top of the placed anchor)
         public float RopeLength;     // total rope available
+        public float WallDistance;   // body standoff from the wall to rappel at; 0 = use the controller default
     }
 
     /// <summary>
@@ -60,11 +61,20 @@ namespace Game.Climbing
         public float footStepDuration = 0.18f;
         [Tooltip("How much the toes angle to the foot's OWN SIDE in character space (same convention as ClimbController).")]
         public float footToeSide = 0.5f;
+        [Tooltip("How far the planted foot sits OFF the wall face along its normal (metres). Raise this if the " +
+                 "foot mesh clips into the wall; it moves only the feet, leaving the body/hands pose untouched.")]
+        public float footWallOffset = 0.05f;
         [Tooltip("Euler offset on the LEFT planted foot — the rig's foot-bone axis correction. COPY the tuned value " +
                  "from ClimbController's 'Foot Plant Rotation'.")]
         public Vector3 footPlantRotation = Vector3.zero;
         [Tooltip("Per-axis sign multiplier applied to footPlantRotation for the RIGHT foot (copy from ClimbController).")]
         public Vector3 footPlantMirror = new Vector3(-1f, 1f, 1f);
+        [Tooltip("Effector-level rotation offset on the planted FOOT bone (same mechanism as ClimbController's " +
+                 "'Foot Grip Rotation' — applied at IK write time, on top of the plant convention). Fine-tunes the " +
+                 "sole's orientation live without touching the plant math.")]
+        public Vector3 footGripRotation = Vector3.zero;
+        [Tooltip("Per-axis sign multiplier applied to footGripRotation for the RIGHT foot (mirror the chiral bone).")]
+        public Vector3 footGripMirror = new Vector3(-1f, 1f, 1f);
         [Tooltip("Extra DOWNWARD offset of the foot targets while descending, so the feet lead the body " +
                  "down the wall instead of trailing above it (trailing feet also distort the torso lean).")]
         public float footDownLead = 0.35f;
@@ -89,6 +99,21 @@ namespace Game.Climbing
         [Header("Stamina")]
         [Tooltip("Stamina per second while moving UP the wall. Idle and descending are free (design).")]
         public float rappelUpDrainRate = 8f;
+
+        [Header("Free Hang (RopeAlone)")]
+        [Tooltip("Full-body RopeAlone blend-tree layer, entered when the wall runs out below with rope left. " +
+                 "Its state is driven by the same RopeMoveY param (-1 down / 0 idle / 1 up).")]
+        public string ropeLayerName = "RopeLayer";
+        public string ropeAloneStateName = "RopeAlone";
+        [Tooltip("Reel-in (up) speed while free-hanging (m/s). Reaching the wall again resumes wall rappel.")]
+        public float freeHangUpSpeed = 0.9f;
+        [Tooltip("Pay-out (down) speed while free-hanging (m/s). Stops hard at the rope's end.")]
+        public float freeHangDownSpeed = 1.5f;
+        [Tooltip("Constant stamina/sec while free-hanging (holding bodyweight with no wall to brace on). " +
+                 "Emptying the tank makes the character lose grip and let go (falls).")]
+        public float ropeAloneDrainRate = 6f;
+        [Tooltip("How fast the RopeLayer (full-body RopeAlone pose) fades in on leg-release / out on re-contact.")]
+        public float ropeLayerFadeSpeed = 5f;
 
         [Header("Mantle (top-out, climb-style)")]
         [Tooltip("Height above the root at which the wall must still exist to keep ascending. When the wall " +
@@ -132,9 +157,32 @@ namespace Game.Climbing
         /// </summary>
         public event Action OnTopOutSettling;
 
-        private enum Phase { Inactive, Entering, Rappelling, Mantling, GettingUp }
+        /// <summary>Fired when the RopeAlone free-hang pose starts (true) and ends (false). The rope
+        /// system routes the rope through its between-feet hold only while this is active, so the
+        /// dangling remainder reads as passing between the legs.</summary>
+        public event Action<bool> OnFreeHangChanged;
+
+        private enum Phase { Inactive, Entering, Rappelling, FreeHang, Mantling, GettingUp }
 
         public bool IsRappelling => _phase != Phase.Inactive;
+
+        /// <summary>The current free-hang line: the vertical line (XZ meaningful) the body hangs on, the
+        /// wall normal it braces toward on a reel-up, and the standoff. Valid while free-hanging — the rope
+        /// system captures it so a later below-grab re-hangs at the SAME offset the wall→rope-alone
+        /// transition produced (rather than snapping onto the rope closer to the wall).</summary>
+        public Vector3 FreeHangPoint => _hangXZ;
+        public Vector3 FreeHangNormal => _wallNormal;
+        public float FreeHangDistance => _bodyWallDistance;
+
+        private bool _freeHangSignal;
+
+        /// <summary>Raises <see cref="OnFreeHangChanged"/> only on an actual change.</summary>
+        private void SetFreeHangSignal(bool active)
+        {
+            if (_freeHangSignal == active) return;
+            _freeHangSignal = active;
+            OnFreeHangChanged?.Invoke(active);
+        }
 
         // -- Player seams --
         private IControlLock _controlLock;
@@ -147,8 +195,11 @@ namespace Game.Climbing
         private EffectorRig _rig;
         private int _climbLayerIndex = -1;
         private int _upperBodyLayerIndex = -1;
+        private int _ropeLayerIndex = -1;
         private bool _upperBodyStateActive;
         private int _probeMask;
+        private float _ropeLayerWeight, _ropeLayerWeightTarget;   // RopeAlone full-body pose fade
+        private Vector3 _hangXZ;                                  // free-hang line: x,z fixed, body moves only in Y
 
         private static readonly int HClimbUp = Animator.StringToHash("ClimbUp");
         private static readonly int HRopeMoveY = Animator.StringToHash("RopeMoveY");
@@ -163,6 +214,7 @@ namespace Game.Climbing
         private Vector3 _wallNormal;
         private Vector3 _anchorPoint;
         private float _ropeLength;
+        private float _bodyWallDistance;   // active standoff for this rappel (per-rope, falls back to bodyWallDistance)
         private float _masterWeight, _masterWeightTarget;
         private float _footLead;         // smoothed direction-dependent foot height bias
         private bool _wallLost;          // R5 seam: wall ran out below with rope remaining
@@ -194,6 +246,7 @@ namespace Game.Climbing
             {
                 _climbLayerIndex = _animator.GetLayerIndex("ClimbingLayer");
                 _upperBodyLayerIndex = _animator.GetLayerIndex("AimingUpperBody");
+                _ropeLayerIndex = _animator.GetLayerIndex(ropeLayerName);
             }
 
             if (_controlLock == null) Debug.LogError("[RappelController] No IControlLock on the player hierarchy.");
@@ -210,6 +263,7 @@ namespace Game.Climbing
             _wallNormal = start.WallNormal.normalized;
             _anchorPoint = start.AnchorPoint;
             _ropeLength = start.RopeLength;
+            _bodyWallDistance = start.WallDistance > 0.001f ? start.WallDistance : bodyWallDistance;
             _wallLost = false;
             _footLead = 0f;
 
@@ -221,7 +275,7 @@ namespace Game.Climbing
 
             _enterStartPos = _motor.Transform.position;
             _enterStartRot = _motor.Transform.rotation;
-            _enterTargetPos = start.WallPoint + _wallNormal * bodyWallDistance;
+            _enterTargetPos = start.WallPoint + _wallNormal * _bodyWallDistance;
             _enterTimer = 0f;
 
             if (ik != null) ik.enabled = true;
@@ -271,6 +325,69 @@ namespace Game.Climbing
             return true;
         }
 
+        /// <summary>
+        /// Takes the body onto a rope that has NO wall to brace against — grabbed while hanging in open
+        /// air, e.g. the dangling tail below a short wall, grabbed from the ground. Snaps under the grab
+        /// point and enters the RopeAlone free-hang directly. Reeling up can still re-contact a wall
+        /// (<see cref="ExitFreeHangToWall"/>) and resume normal wall rappel. Returns false if unavailable.
+        /// </summary>
+        public bool BeginFreeHang(in RappelStart start)
+        {
+            if (IsRappelling || _rig == null || _motor == null) return false;
+            if (_controlLock == null || _controlLock.IsExternalControlActive) return false;
+
+            _wallNormal = start.WallNormal.sqrMagnitude > 0.0001f
+                ? start.WallNormal.normalized
+                : _motor.Transform.forward;
+            _anchorPoint = start.AnchorPoint;
+            _ropeLength = start.RopeLength;
+            _bodyWallDistance = start.WallDistance > 0.001f ? start.WallDistance : bodyWallDistance;
+            _wallLost = true;
+            _footLead = 0f;
+            _probeMask = wallMask & ~(1 << _motor.Transform.gameObject.layer);
+
+            _controlLock.RequestExternalControl();
+            _stamina?.SetClimbState(true, false);
+
+            if (ik != null) ik.enabled = true;
+            _masterWeight = 0f;
+            _masterWeightTarget = 0f;               // no wall, no planted feet
+            _rig.SetMasterWeight(0f);
+            _rig.SetEffectorWeight(ClimbEffector.LeftFoot, 0f);
+            _rig.SetEffectorWeight(ClimbEffector.RightFoot, 0f);
+            _rig.SetEffectorWeight(ClimbEffector.LeftHand, 0f);
+            _rig.SetEffectorWeight(ClimbEffector.RightHand, 0f);
+            _rig.SetEffectorWeight(ClimbEffector.RootBody, 0f);
+
+            if (_animator != null)
+            {
+                _animator.SetFloat(HAimMoveX, 0f);
+                _animator.SetFloat(HAimMoveY, 0f);
+            }
+
+            if (_playerInput != null && _playerInput.actions["Use"] != null)
+                _playerInput.actions["Use"].performed += HandleUse;
+
+            // Prime the wall-rappel upper-body pose UNDERNEATH the full-body RopeAlone layer, so if the
+            // player reels up and re-contacts a wall, fading RopeLayer out reveals the correct pose.
+            _upperBodyStateActive = false;
+            if (_animator != null && _upperBodyLayerIndex >= 0 &&
+                _animator.HasState(_upperBodyLayerIndex, Animator.StringToHash(upperBodyStateName)))
+            {
+                _animator.SetFloat(HRopeMoveY, 0f);
+                _animator.CrossFadeInFixedTime(upperBodyStateName, 0.25f, _upperBodyLayerIndex);
+                _upperBodyStateActive = true;
+            }
+
+            // Snap under the grab point (hang straight down from the rope), keeping the current height.
+            Transform body = _motor.Transform;
+            body.position = new Vector3(start.WallPoint.x, body.position.y, start.WallPoint.z);
+            body.rotation = HangRotation();
+
+            EnterFreeHang();
+            return true;
+        }
+
         private void Update()
         {
             if (_phase == Phase.Inactive) return;
@@ -282,10 +399,24 @@ namespace Game.Climbing
             _masterWeight = Mathf.MoveTowards(_masterWeight, _masterWeightTarget, rigFadeSpeed * dt);
             _rig.SetMasterWeight(_masterWeight);
 
+            // Effector-level foot rotation offset (climb's Foot Grip Rotation equivalent) — re-applied
+            // each frame so it's live-tunable. Only bites while the feet are weighted (planted rappel).
+            _rig.SetRotationOffset(ClimbEffector.LeftFoot, Quaternion.Euler(footGripRotation));
+            _rig.SetRotationOffset(ClimbEffector.RightFoot, Quaternion.Euler(Vector3.Scale(footGripRotation, footGripMirror)));
+
+            // RopeAlone full-body pose fades in on leg-release, out on wall re-contact. Only touched
+            // while non-zero so it never fights RopeController's own RopeLayer use during placement.
+            if (_ropeLayerIndex >= 0 && (_ropeLayerWeight > 0f || _ropeLayerWeightTarget > 0f))
+            {
+                _ropeLayerWeight = Mathf.MoveTowards(_ropeLayerWeight, _ropeLayerWeightTarget, ropeLayerFadeSpeed * dt);
+                _animator.SetLayerWeight(_ropeLayerIndex, _ropeLayerWeight);
+            }
+
             switch (_phase)
             {
                 case Phase.Entering: TickEnter(dt); break;
                 case Phase.Rappelling: TickRappel(dt); break;
+                case Phase.FreeHang: TickFreeHang(dt); break;
                 case Phase.Mantling: TickMantle(dt); break;
                 case Phase.GettingUp: TickGetup(dt); break;
             }
@@ -320,6 +451,15 @@ namespace Game.Climbing
         private void TickRappel(float dt)
         {
             Transform body = _motor.Transform;
+
+            // Completely drained → lose grip and fall (same as free-hang; extended to the wall).
+            if (_stamina != null && _stamina.CurrentStamina <= 0f)
+            {
+                if (logRappelEvents) Debug.Log("[RappelController] Wall rappel: out of stamina — let go.");
+                FinishRappel(RappelExitKind.Detached);
+                return;
+            }
+
             float move = _input != null ? _input.MoveInput.y : 0f;   // stick up = ascend
 
             // Up costs stamina; empty tank blocks ascending (descending stays free).
@@ -366,7 +506,7 @@ namespace Game.Climbing
             {
                 _wallNormal = wallHit.normal;
                 _wallLost = false;
-                body.position = wallHit.point + _wallNormal * bodyWallDistance;
+                body.position = wallHit.point + _wallNormal * _bodyWallDistance;
             }
             else if (movingUp)
             {
@@ -375,11 +515,14 @@ namespace Game.Climbing
             }
             else if (movingDown)
             {
-                // Wall ran out below with rope remaining → RopeAlone free-hang (next increment).
-                // Until then: hard stop at the wall's end.
-                if (!_wallLost && logRappelEvents)
-                    Debug.Log("[RappelController] Wall ran out below — holding (RopeAlone comes in R5).");
-                _wallLost = true;
+                // Wall ran out below with rope remaining. If the ground is right there, step off;
+                // otherwise release the legs and hang from the rope (RopeAlone free-hang).
+                if (Physics.Raycast(body.position + Vector3.up * 0.1f, Vector3.down,
+                                    reachBottomDistance + 0.1f, _probeMask, QueryTriggerInteraction.Ignore))
+                    FinishRappel(RappelExitKind.SteppedOffBottom);
+                else
+                    EnterFreeHang();
+                return;
             }
 
             body.rotation = Quaternion.Slerp(body.rotation, RappelRotation(), rotationLerpSpeed * dt);
@@ -446,12 +589,12 @@ namespace Game.Climbing
             onWall = Physics.Raycast(probe, -_wallNormal, out RaycastHit hit, 1.2f, _probeMask, QueryTriggerInteraction.Ignore);
             if (onWall)
             {
-                point = hit.point + hit.normal * 0.02f;
+                point = hit.point + hit.normal * footWallOffset;
                 normal = hit.normal;
             }
             else
             {
-                point = basePos + right * (sideSign * footSpread) + Vector3.up * footHeight - _wallNormal * (bodyWallDistance - 0.05f);
+                point = basePos + right * (sideSign * footSpread) + Vector3.up * footHeight - _wallNormal * (_bodyWallDistance - 0.05f);
             }
 
             // Climb-convention plant: sole ON the wall (foot up = wall normal), toes pointing up the
@@ -471,6 +614,124 @@ namespace Game.Climbing
             _rig.SnapToPose(foot, p, r);
         }
 
+        // ───────────────────────────────────────────── free hang ──
+
+        /// <summary>Wall ran out below with rope left: release the feet and hang from the rope in the
+        /// full-body RopeAlone pose. Up reels toward the wall, down pays out to the rope's end.</summary>
+        private void EnterFreeHang()
+        {
+            _phase = Phase.FreeHang;
+            _masterWeightTarget = 0f;                   // feet release from the (now absent) wall
+            _hangXZ = _motor.Transform.position;        // hang straight down from here; only Y changes
+
+            if (_animator != null && _ropeLayerIndex >= 0 &&
+                _animator.HasState(_ropeLayerIndex, Animator.StringToHash(ropeAloneStateName)))
+            {
+                _animator.SetFloat(HRopeMoveY, 0f);
+                _ropeLayerWeightTarget = 1f;
+                // Fixed time: the RopeAlone tree has a near-zero-speed idle child (huge state length),
+                // so a normalized crossfade would crawl — project rule.
+                _animator.CrossFadeInFixedTime(ropeAloneStateName, 0.25f, _ropeLayerIndex);
+            }
+
+            SetFreeHangSignal(true);   // rope now routes through the between-feet hold
+            if (logRappelEvents) Debug.Log("[RappelController] Entered RopeAlone free-hang.");
+        }
+
+        private void TickFreeHang(float dt)
+        {
+            Transform body = _motor.Transform;
+
+            // Constant drain — holding your own weight with no wall to stand on. Empty tank → let go.
+            if (_stamina != null)
+            {
+                _stamina.SpendStamina(ropeAloneDrainRate * dt);
+                if (_stamina.CurrentStamina <= 0f)
+                {
+                    if (logRappelEvents) Debug.Log("[RappelController] RopeAlone: out of stamina — let go.");
+                    FinishRappel(RappelExitKind.Detached);
+                    return;
+                }
+            }
+
+            float move = _input != null ? _input.MoveInput.y : 0f;
+            bool up = move > 0.1f;
+            bool down = move < -0.1f;
+
+            // Vertical move along the hang line; descending stops hard at the rope's end.
+            float vy = up ? freeHangUpSpeed : (down ? -freeHangDownSpeed : 0f);
+            Vector3 next = body.position + Vector3.up * (vy * dt);
+            if (down && Vector3.Distance(_anchorPoint, next) > _ropeLength)
+                next = body.position;                   // out of rope
+            next.x = _hangXZ.x;
+            next.z = _hangXZ.z;
+            body.position = next;
+
+            body.rotation = Quaternion.Slerp(body.rotation, HangRotation(), rotationLerpSpeed * dt);
+
+            // Reeling up: the wall may return at body height → step back onto it and resume rappel.
+            if (up)
+            {
+                Vector3 origin = next + Vector3.up * topOutProbeHeight + _wallNormal * 0.3f;
+                if (Physics.Raycast(origin, -_wallNormal, out RaycastHit wall,
+                                    wallProbeDistance + 0.3f, _probeMask, QueryTriggerInteraction.Ignore) &&
+                    Vector3.Angle(wall.normal, Vector3.up) >= 55f)
+                {
+                    ExitFreeHangToWall(wall);
+                    return;
+                }
+            }
+
+            // Descending onto ground close below → step off at the bottom (rope drops, character lands).
+            // Gated on down so a hang grabbed AT ground level (from below a short wall) doesn't
+            // instantly step off — the player must actively move down onto the ground.
+            if (down &&
+                Physics.Raycast(body.position + Vector3.up * 0.1f, Vector3.down,
+                                reachBottomDistance + 0.1f, _probeMask, QueryTriggerInteraction.Ignore))
+            {
+                FinishRappel(RappelExitKind.SteppedOffBottom);
+                return;
+            }
+
+            if (_animator != null)
+                _animator.SetFloat(HRopeMoveY, up ? 1f : (down ? -1f : 0f), upperBodyBlendDamp, dt);
+        }
+
+        /// <summary>Face the wall/rope horizontally, upright — no lean, there's nothing to brace on.</summary>
+        private Quaternion HangRotation()
+        {
+            Vector3 faceDir = Vector3.ProjectOnPlane(-_wallNormal, Vector3.up);
+            if (faceDir.sqrMagnitude < 1e-4f) return _motor.Transform.rotation;
+            return Quaternion.LookRotation(faceDir.normalized, Vector3.up);
+        }
+
+        /// <summary>Reeled back up to where the wall exists again: plant onto it and resume wall rappel.</summary>
+        private void ExitFreeHangToWall(RaycastHit wall)
+        {
+            _wallNormal = wall.normal;
+            _wallLost = false;
+
+            Transform body = _motor.Transform;
+            body.position = wall.point + _wallNormal * _bodyWallDistance;
+
+            // Re-enable the foot effectors — free-hang zeroed them on leg-release. Without this the
+            // master weight fades back up but the individual feet have no IK influence, so they'd
+            // stay frozen in the RopeAlone pose instead of planting and stepping on the wall.
+            _rig.SetEffectorWeight(ClimbEffector.LeftFoot, 1f);
+            _rig.SetEffectorWeight(ClimbEffector.RightFoot, 1f);
+
+            Quaternion rot = RappelRotation();
+            PlantFootImmediate(ClimbEffector.LeftFoot, body.position, rot);
+            PlantFootImmediate(ClimbEffector.RightFoot, body.position, rot);
+
+            _masterWeightTarget = 1f;          // feet back on the wall
+            _ropeLayerWeightTarget = 0f;       // fade the full-body RopeAlone pose out, revealing the wall pose
+            _phase = Phase.Rappelling;
+
+            SetFreeHangSignal(false);          // back on the wall — tail hangs from the lower hand again
+            if (logRappelEvents) Debug.Log("[RappelController] RopeAlone: wall regained — back to rappel.");
+        }
+
         // ─────────────────────────────────────────────── top-out ──
 
         /// <summary>Climb-style mantle probes from the current body position over the lip.</summary>
@@ -479,7 +740,7 @@ namespace Game.Climbing
             Transform body = _motor.Transform;
             // The wall ran out at topOutProbeHeight — the lip is somewhere below that. Reference the
             // probes from there, pushed to the wall side so they start clear of the leaned-back body.
-            Vector3 lipRef = body.position + Vector3.up * topOutProbeHeight - _wallNormal * (bodyWallDistance - 0.1f);
+            Vector3 lipRef = body.position + Vector3.up * topOutProbeHeight - _wallNormal * (_bodyWallDistance - 0.1f);
 
             CharacterController cc = _motor.Controller;
             bool ccWasEnabled = cc != null && cc.enabled;
@@ -623,13 +884,15 @@ namespace Game.Climbing
 
         private void HandleUse(InputAction.CallbackContext ctx)
         {
-            // Only mid-wall: during the scripted mantle/getup the move must finish.
-            if (_phase == Phase.Entering || _phase == Phase.Rappelling)
+            // Only mid-wall / free-hang: during the scripted mantle/getup the move must finish.
+            if (_phase == Phase.Entering || _phase == Phase.Rappelling || _phase == Phase.FreeHang)
                 FinishRappel(RappelExitKind.Detached);
         }
 
         private void FinishRappel(RappelExitKind kind)
         {
+            SetFreeHangSignal(false);   // leaving the rope entirely — clear the between-feet routing
+
             if (_playerInput != null && _playerInput.actions["Use"] != null)
                 _playerInput.actions["Use"].performed -= HandleUse;
 
@@ -641,6 +904,9 @@ namespace Game.Climbing
             _rig.SetMasterWeight(0f);
             if (ik != null) ik.enabled = false;
             if (_animator != null && _climbLayerIndex >= 0) _animator.SetLayerWeight(_climbLayerIndex, 0f);
+            if (_animator != null && _ropeLayerIndex >= 0) _animator.SetLayerWeight(_ropeLayerIndex, 0f);
+            _ropeLayerWeight = 0f;
+            _ropeLayerWeightTarget = 0f;
 
             if (_upperBodyStateActive && _animator != null)
             {

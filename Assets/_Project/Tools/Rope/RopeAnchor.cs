@@ -35,6 +35,9 @@ public class RopeAnchor : MonoBehaviour
     public float dropSettleSeconds = 2.5f;
     [Tooltip("Surfaces the tail collides with (its own anchor pieces and the player are ignored by hierarchy).")]
     public LayerMask tailCollisionMask = ~0;
+    [Tooltip("How strongly the tail is pulled back to hanging straight down under its pin (weighted tip). " +
+             "Stops a tail that brushes geometry from drifting away forever. 0 = pure verlet.")]
+    public float tailHangReturn = 2f;
 
     /// <summary>Total usable rope length, set from the consumed RopeItem at placement.</summary>
     public float RopeLength { get; private set; } = 20f;
@@ -58,11 +61,13 @@ public class RopeAnchor : MonoBehaviour
     private HookshotRope rope;            // anchor → ledge pivot (if any) or first hand
     private HookshotRope ropeWaypointSeg; // ledge pivot → first hand (only while held over a pivot)
     private HookshotRope ropeSecond;      // first hand → second hand (only while held with two points)
+    private HookshotRope ropeFootSeg;     // lower hand → between-feet hold (only in RopeAlone free-hang)
     private VerletRopeTail tail;          // free remainder hanging from the last used point
     private Transform holder;             // player attach point while held
     private Transform handA, handB;       // the two hand points as given; routing order is dynamic
     private bool handOrderSwapped;        // true = handB is currently the FIRST (higher) hand
     private Transform waypoint;           // ledge pivot the rope runs over (rappel edge object)
+    private Transform freeHangHold;       // extra routing point between the feet, active only in free-hang
     private Transform playerRoot;         // player hierarchy root, so the tail ignores the player's colliders
     private bool onWall;                  // while held, the tail only shows once the body is on the wall (rappelling)
 
@@ -77,12 +82,33 @@ public class RopeAnchor : MonoBehaviour
     public bool HasRappelEntry { get; private set; }
     public Vector3 RappelWallPoint { get; private set; }
     public Vector3 RappelWallNormal { get; private set; }
+    /// <summary>Body standoff from the wall captured at the first rappel, so a later re-grab rappels at
+    /// the same distance (and orientation) rather than the controller's current default.</summary>
+    public float RappelBodyDistance { get; private set; }
 
-    public void SetRappelEntry(Vector3 wallPoint, Vector3 wallNormal)
+    public void SetRappelEntry(Vector3 wallPoint, Vector3 wallNormal, float bodyDistance)
     {
         RappelWallPoint = wallPoint;
         RappelWallNormal = wallNormal;
+        RappelBodyDistance = bodyDistance;
         HasRappelEntry = true;
+    }
+
+    /// <summary>The free-hang line captured the FIRST time this rope went wall-rappel → rope-alone (or a
+    /// ground free-hang grab): the vertical hang line, wall normal and standoff. A later below-grab replays
+    /// it so the player hangs at the same distance from the wall as the natural transition, not snapped in
+    /// closer. Persists with the rope route (cleared with the ledge pivot).</summary>
+    public bool HasFreeHangEntry { get; private set; }
+    public Vector3 FreeHangPoint { get; private set; }
+    public Vector3 FreeHangNormal { get; private set; }
+    public float FreeHangDistance { get; private set; }
+
+    public void SetFreeHangEntry(Vector3 point, Vector3 normal, float bodyDistance)
+    {
+        FreeHangPoint = point;
+        FreeHangNormal = normal;
+        FreeHangDistance = bodyDistance;
+        HasFreeHangEntry = true;
     }
 
     /// <summary>While the rope is held, the organic tail only shows once the body is on the wall
@@ -93,6 +119,17 @@ public class RopeAnchor : MonoBehaviour
         if (onWall == value) return;
         onWall = value;
         UpdateTail();
+    }
+
+    /// <summary>Routes the rope through an extra point BELOW the hands (between the feet), used only
+    /// in the RopeAlone free-hang pose so the rope reads as passing between the legs, abseil-style.
+    /// The dangling tail then hangs from this point instead of the lower hand. Null clears it — the
+    /// rope runs straight from the hands again (e.g. back on the wall, or dropped).</summary>
+    public void SetFreeHangHold(Transform hold)
+    {
+        if (freeHangHold == hold) return;
+        freeHangHold = hold;
+        RebuildRouting();
     }
 
     private void OnEnable() { Placed.Add(this); }
@@ -167,7 +204,8 @@ public class RopeAnchor : MonoBehaviour
         handA = holdPoint;
         handB = secondHoldPoint;
         handOrderSwapped = false;
-        onWall = false;   // hidden until the rope system reports the body is on the wall
+        onWall = false;         // hidden until the rope system reports the body is on the wall
+        freeHangHold = null;    // enabled only once the rappel reports the free-hang pose
         playerRoot = holdPoint != null ? holdPoint.root : playerRoot;
 
         if (tail != null) tail.WakeUp();   // re-grabbed: the tail simulates live from the hand again
@@ -200,7 +238,8 @@ public class RopeAnchor : MonoBehaviour
         if (waypoint == null) return;
         Destroy(waypoint.gameObject);
         waypoint = null;
-        HasRappelEntry = false;   // entry data lives and dies with the pivot
+        HasRappelEntry = false;    // entry data lives and dies with the pivot
+        HasFreeHangEntry = false;
         RebuildRouting();
     }
 
@@ -266,6 +305,21 @@ public class RopeAnchor : MonoBehaviour
             {
                 ropeSecond.gameObject.SetActive(false);
             }
+
+            // Free-hang only: the rope continues from the lower hand down through the between-feet
+            // hold (abseil pose). The tail then hangs from that hold instead (see GetTailPin).
+            if (freeHangHold != null)
+            {
+                Transform lowerHand = second != null ? second : first;
+                if (ropeFootSeg == null) ropeFootSeg = CreateSegment("RopeFootSegment", lowerHand, freeHangHold);
+                ropeFootSeg.SetStart(lowerHand);
+                ropeFootSeg.SetEnd(freeHangHold);
+                ropeFootSeg.gameObject.SetActive(true);
+            }
+            else if (ropeFootSeg != null)
+            {
+                ropeFootSeg.gameObject.SetActive(false);
+            }
         }
         else
         {
@@ -283,6 +337,7 @@ public class RopeAnchor : MonoBehaviour
             }
             if (ropeWaypointSeg != null) ropeWaypointSeg.gameObject.SetActive(false);
             if (ropeSecond != null) ropeSecond.gameObject.SetActive(false);
+            if (ropeFootSeg != null) ropeFootSeg.gameObject.SetActive(false);
         }
 
         UpdateTail();
@@ -303,7 +358,11 @@ public class RopeAnchor : MonoBehaviour
             Vector3 prev = a;
             if (waypoint != null) { usedArc += Vector3.Distance(prev, waypoint.position); prev = waypoint.position; }
             if (first != null) { usedArc += Vector3.Distance(prev, first.position); prev = first.position; }
-            if (second != null) usedArc += Vector3.Distance(prev, second.position);
+            if (second != null) { usedArc += Vector3.Distance(prev, second.position); prev = second.position; }
+
+            // In free-hang the rope runs on past the lower hand to the between-feet hold — the tail
+            // hangs from there, so it dangles between the legs (abseil), not from the hand.
+            if (freeHangHold != null) { usedArc += Vector3.Distance(prev, freeHangHold.position); pin = freeHangHold; }
         }
         else
         {
@@ -336,6 +395,7 @@ public class RopeAnchor : MonoBehaviour
         tail.particleCount = tailParticles;
         tail.ropeRadius = ropeWidth * 0.5f;
         tail.collisionMask = tailCollisionMask;
+        tail.hangReturn = tailHangReturn;
         tail.Init(pin, ropeMaterial);
         tail.SetIgnoreRoots(transform, playerRoot);
         // Kept at world identity for its world-space verts; parented for lifetime, not transform.
@@ -351,6 +411,7 @@ public class RopeAnchor : MonoBehaviour
         holder = null;
         handA = handB = null;
         handOrderSwapped = false;
+        freeHangHold = null;   // no hands, no between-feet routing
         RebuildRouting();   // straight anchor → pivot; tail re-pinned to the pivot, rest length grown
 
         if (tail != null)

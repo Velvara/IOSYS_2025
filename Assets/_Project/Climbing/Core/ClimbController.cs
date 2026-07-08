@@ -162,7 +162,10 @@ namespace Game.Climbing
         [Tooltip("Release when ground is within this distance below the body. Only checked once the grab has fully faded in (won't fire mid-grab).")]
         [SerializeField] private float reachBottomDistance = 0.5f;
 
-        [Header("BracedReady (Cancel peek)")]
+        [Header("BracedReady (Jump peek)")]
+        [Tooltip("Seconds the Cancel button must be HELD (from any climbing state) to release the climb entirely. " +
+                 "A short TAP of Cancel instead just cancels BracedReady (back to climbing).")]
+        [SerializeField] private float climbReleaseHoldTime = 1.5f;
         [Tooltip("Body yaw (deg) toward the released-hand side — applied as a grip-preserving ROOT rotation. Keep MODEST: the gripping arm must still reach its hold (too high over-stretches the arm). The head angle carries the rest of the 'look away'.")]
         [SerializeField] private float bracedReadyTorsoAngle = 30f;
         [Tooltip("Additional HEAD yaw (deg) on top of the body turn (post-solve, drags no hand — can be large to land the gaze away from the wall).")]
@@ -478,7 +481,12 @@ namespace Game.Climbing
         private float _getupTimer;
         private float _regrabCooldownTimer;
 
-        // -- BracedReady (Cancel peek sub-state) --
+        // -- Cancel button: tap = cancel BracedReady, hold ≥ climbReleaseHoldTime = release the climb --
+        private InputAction _cancelAction;
+        private float _cancelHoldTimer;
+        private bool _cancelWasPressed;
+
+        // -- BracedReady (Jump peek sub-state) --
         private enum ClimbMode { Climbing, BracedReady }
         private ClimbMode _mode = ClimbMode.Climbing;
         private int _readySign;             // +1 = LEFT hand released (turn left); -1 = RIGHT hand released (turn right)
@@ -618,16 +626,17 @@ namespace Game.Climbing
             // re-damped back toward free-look). This event fires right after the brain — our write is final.
             CinemachineCore.CameraUpdatedEvent.AddListener(OnCameraUpdated);
 
-            // Climb-specific inputs straight off PlayerInput (InputHandler is locomotion-only). Use = grab/return;
-            // Cancel = exit (or, when braced, enter BracedReady — wired in a later increment).
+            // Climb-specific inputs straight off PlayerInput (InputHandler is locomotion-only).
+            //   Use   = grab a wall when free (the rope system handles Use-near-rope while climbing).
+            //   Jump  = enter BracedReady from a braced climb, or launch the jump-off from BracedReady.
+            //   Cancel= POLLED (not an event): tap cancels BracedReady, hold ≥ climbReleaseHoldTime releases the climb.
             if (_playerInput != null && _playerInput.actions != null)
             {
                 var use = _playerInput.actions["Use"];
                 if (use != null) use.performed += OnUseInput;
-                var cancel = _playerInput.actions["Cancel"];
-                if (cancel != null) cancel.performed += OnCancelInput;
                 var jump = _playerInput.actions["Jump"];
                 if (jump != null) jump.performed += OnJumpInput;
+                _cancelAction = _playerInput.actions["Cancel"];
             }
 
             // A ragdoll (hard fall / external shove) takes the body — drop whatever climbing still holds.
@@ -651,48 +660,86 @@ namespace Game.Climbing
             {
                 var use = _playerInput.actions["Use"];
                 if (use != null) use.performed -= OnUseInput;
-                var cancel = _playerInput.actions["Cancel"];
-                if (cancel != null) cancel.performed -= OnCancelInput;
                 var jump = _playerInput.actions["Jump"];
                 if (jump != null) jump.performed -= OnJumpInput;
             }
+            _cancelAction = null;
 
             if (_ragdoll != null) _ragdoll.RagdollStarting -= OnRagdollStarting;
         }
 
-        /// <summary>Use: toggle BracedReady while braced-climbing (enter ↔ return), or grab a climbable when free.</summary>
+        /// <summary>Use: grab a climbable when free. While climbing, Use is owned by the rope system
+        /// (Use-near-a-rope hands the body off into rappel) — nothing to do here.</summary>
         private void OnUseInput(InputAction.CallbackContext ctx)
         {
-            if (_isClimbing)
-            {
-                if (_releasing || _mantling || _gettingUp || _climbJumping) return;
-                if (_mode == ClimbMode.BracedReady)
-                {
-                    _readyReturning = !_readyReturning;     // toggle: peek ↔ return-to-climbing (responsive mid-ease)
-                    _pendingSwap = false;                   // a Use press aborts any in-flight side-swap intent
-                                                            // (else the camera would keep steering to the other side)
-                }
-                else if (!_freeHang)
-                    EnterBracedReady();                     // braced → peek
-                return;
-            }
+            if (_isClimbing) return;                        // BracedReady is on Jump now; rope handoff is RopeController's
             if (_input != null && _input.AimHeld) return;   // Use fires a tool while aiming — don't also grab
             if (_ragdoll != null && _ragdoll.IsRagdolled) return;   // that press is the ragdoll recovery, not a grab
             _useBufferTimer = useBufferTime;                // buffered: Update grabs when a candidate is in reach (incl. mid-jump catch)
         }
 
-        /// <summary>Cancel: exit the climb (drop) from any climbing state — braced, BracedReady, or free-hang.</summary>
-        private void OnCancelInput(InputAction.CallbackContext ctx)
-        {
-            if (!_isClimbing || _releasing || _mantling || _gettingUp || _climbJumping) return;
-            BeginRelease();
-        }
-
-        /// <summary>Jump: from BracedReady, launch off the wall (wind-up → ClimbJump clip → leave-wall event → launch).</summary>
+        /// <summary>Jump: enter BracedReady from a braced climb; press again in BracedReady to launch the
+        /// jump-off (wind-up → ClimbJump clip → leave-wall event → launch).</summary>
         private void OnJumpInput(InputAction.CallbackContext ctx)
         {
-            if (_isClimbing && _mode == ClimbMode.BracedReady && !_climbJumping && !_releasing)
-                BeginClimbJump();
+            if (!_isClimbing || _releasing || _mantling || _gettingUp) return;
+
+            if (_mode == ClimbMode.BracedReady)
+            {
+                if (!_climbJumping) BeginClimbJump();        // second press → launch
+            }
+            else if (!_freeHang && !_climbJumping)
+            {
+                EnterBracedReady();                          // braced → peek/aim
+            }
+        }
+
+        /// <summary>Cancel (polled): a short TAP cancels BracedReady (back to climbing); HELD for
+        /// climbReleaseHoldTime releases the climb entirely from any climbing state.</summary>
+        private void TickCancelInput(float dt)
+        {
+            if (_cancelAction == null || !_isClimbing ||
+                _releasing || _mantling || _gettingUp || _climbJumping || _jumpAirborne)
+            {
+                _cancelHoldTimer = 0f;
+                _cancelWasPressed = false;
+                return;
+            }
+
+            bool pressed = _cancelAction.IsPressed();
+            if (pressed)
+            {
+                _cancelHoldTimer += dt;
+                if (_cancelHoldTimer >= climbReleaseHoldTime)
+                {
+                    BeginRelease();                          // held long enough → drop the whole climb
+                    _cancelWasPressed = false;
+                    _cancelHoldTimer = 0f;
+                    return;
+                }
+            }
+            else
+            {
+                // Released before the hold threshold = a TAP → cancel BracedReady (return to climbing).
+                if (_cancelWasPressed && _cancelHoldTimer < climbReleaseHoldTime &&
+                    _mode == ClimbMode.BracedReady && !_readyReturning)
+                    _readyReturning = true;
+                _cancelHoldTimer = 0f;
+            }
+            _cancelWasPressed = pressed;
+        }
+
+        /// <summary>Immediately releases the climb (external control returned THIS frame) for a handoff to
+        /// another system — the rope system taking the body over into rappel. Unlike Cancel/BeginRelease
+        /// this doesn't fade or reset velocity; the taking-over system repositions the body. Returns false
+        /// if the climb can't be released right now (a scripted mantle/jump is running).</summary>
+        public bool ReleaseForHandoff()
+        {
+            if (!_isClimbing || _releasing || _mantling || _gettingUp || _climbJumping || _jumpAirborne)
+                return false;
+            _rig?.SetMasterWeight(0f);
+            FinishRelease();   // control released, layers zeroed, IK asleep — rappel re-enables its own IK
+            return true;
         }
 
         private void Update()
@@ -700,13 +747,22 @@ namespace Game.Climbing
             if (_regrabCooldownTimer > 0f) _regrabCooldownTimer -= Time.deltaTime;
             if (_useBufferTimer > 0f) _useBufferTimer -= Time.deltaTime;
 
+            // Cancel is polled (not an event) so we can distinguish a tap (cancel BracedReady) from a
+            // hold (release the climb).
+            TickCancelInput(Time.deltaTime);
+
             // Post-jump airborne hold: motor flies the body; hold the ClimbJump pose + camera until land/catch/fall.
             if (_jumpAirborne) TickJumpAirborne(Time.deltaTime);
 
             // Look for a grab candidate while free (suppressed after a mantle/drop, and during the post-jump
             // turn). Throttled to candidateScanHz — but scanned every frame while a buffered Use press or the
             // airborne catch window is live, so grabs and mid-jump wall-catches stay frame-accurate.
-            if (!_isClimbing && _regrabCooldownTimer <= 0f && !_jumpReattachBlocked &&
+            // Don't scan/grab while ANOTHER system owns the body (e.g. the rope system took us into
+            // rappel from a climb) — otherwise a Use press meant to detach the rope could re-grab a
+            // nearby climbable. The post-jump airborne window has already released external control, so
+            // the mid-jump wall catch is unaffected.
+            bool otherSystemOwnsBody = _controlLock != null && _controlLock.IsExternalControlActive && !_isClimbing;
+            if (!_isClimbing && !otherSystemOwnsBody && _regrabCooldownTimer <= 0f && !_jumpReattachBlocked &&
                 (_ragdoll == null || !_ragdoll.IsRagdolled))
             {
                 _candidateScanTimer -= Time.deltaTime;
@@ -1046,8 +1102,28 @@ namespace Game.Climbing
 
             _stamina?.SetClimbState(true, _rig.AnyMoving);
 
+            // Completely drained → lose grip and drop off the wall (documented auto-tumble; mirrors the
+            // rope free-hang let-go). Only from actual climbing — never mid-mantle/getup/jump/release.
+            if (_stamina != null && _stamina.CurrentStamina <= 0f &&
+                _mode == ClimbMode.Climbing && !_mantling && !_gettingUp && !_climbJumping && !_releasing)
+            {
+                if (logClimbEvents) Debug.Log("[ClimbController] Out of stamina — losing grip.");
+                LoseGripToFall();
+                return;
+            }
+
             if (_releasing && _rig.MasterWeight <= 0.001f)
                 FinishRelease();
+        }
+
+        /// <summary>Stamina hit zero: the climber loses grip and drops off the wall. Normalized with the
+        /// rope wall-rappel / free-hang let-go — release into gravity (vertical velocity zeroed), and let
+        /// PlayerRagdoll's own hard-fall monitor turn it into a tumble if the drop is far enough. Same
+        /// outcome as the rope modes' Detached: a short drop lands, a long one ragdolls.</summary>
+        private void LoseGripToFall()
+        {
+            _motor?.SetVerticalVelocity(0f);
+            FinishRelease();
         }
 
     }
