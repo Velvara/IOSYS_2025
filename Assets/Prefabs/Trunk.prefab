@@ -69,7 +69,7 @@ MonoBehaviour:
   lightSearchRadius: 40
   timeToRot: 2
   ringRadius: 0.8
-  segmentLength: 0.2
+  segmentLength: 0.3
   segmentRetries: 6
   segmentAmount: 60
   ringVertices: 24
@@ -150,8 +150,8 @@ MonoBehaviour:
       inWeight: 0.33333334
       outWeight: 0.33333334
     - serializedVersion: 3
-      time: 0.54548776
-      value: 0.22057131
+      time: 0.5560926
+      value: 0.24193361
       inSlope: 1.4953022
       outSlope: 1.4953022
       tangentMode: 0
@@ -168,8 +168,8 @@ MonoBehaviour:
       inWeight: 0.33333334
       outWeight: 0.33333334
     - serializedVersion: 3
-      time: 0.57918394
-      value: 0.5254566
+      time: 0.58183897
+      value: 0.47844428
       inSlope: 1.482056
       outSlope: 1.482056
       tangentMode: 0
@@ -233,11 +233,11 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
-  screwStrength: 0.2
-  maxScrewTurns: 2.13
-  noiseFrequency: 0.72
-  noiseStrength: 0.69
-  stiffInfluence: 1
+  screwStrength: 0.12
+  maxScrewTurns: 1.25
+  noiseFrequency: 0.33
+  noiseStrength: 0.3
+  stiffInfluence: 0.5
   trunkMaterial: {fileID: 2100000, guid: a8a94ba5c47063e4490cfd53d0358176, type: 2}
   growthDuration: 3
   growthEase: 2

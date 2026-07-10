@@ -59,10 +59,13 @@ namespace Game.Climbing
         [Tooltip("A foot re-steps when its planted point drifts this far from the desired spot.")]
         public float footStepThreshold = 0.35f;
         public float footStepDuration = 0.18f;
-        [Tooltip("Free-hang → wall plant-in only: seconds for the feet to step onto their first holds. Both " +
-                 "feet step together, so this is roughly the whole plant-in duration. Separate from " +
-                 "footStepDuration so the plant-in can be snappier without affecting normal stepping.")]
+        [Tooltip("Free-hang → wall plant-in only: seconds for EACH foot to step onto its first hold. Separate " +
+                 "from footStepDuration so the plant-in can be snappier without affecting normal stepping.")]
         public float plantStepDuration = 0.1f;
+        [Tooltip("Free-hang → wall plant-in only: when the SECOND foot starts, as a fraction of the first " +
+                 "foot's step. 0 = both together; 0.5 = second starts as the first is halfway; 1 = fully " +
+                 "sequential. Total plant-in ≈ plantStepDuration × (1 + this).")]
+        [Range(0f, 1f)] public float plantStaggerFraction = 0.5f;
         [Tooltip("How much the toes angle to the foot's OWN SIDE in character space (same convention as ClimbController).")]
         public float footToeSide = 0.5f;
         [Tooltip("How far the planted foot sits OFF the wall face along its normal (metres). Raise this if the " +
@@ -948,9 +951,11 @@ namespace Game.Climbing
             if (_upperBodyStateActive)
                 _animator.SetFloat(HRopeMoveY, 0f, upperBodyBlendDamp, dt);
 
-            // Step BOTH feet onto their holds at once (unlike normal one-at-a-time stepping) so the plant-in
-            // takes just a single step. Kick the steps while neither foot is moving; once they've settled on
-            // (or given up finding) wall, hand control back to the player.
+            // Kick both foot steps once, while neither is moving. The LEAD foot (farther from its hold)
+            // starts immediately; the TRAIL foot starts plantStaggerFraction of the way through the lead's
+            // step — done via the effector's delayed-start timing (delay+lag = same full duration, offset).
+            // Both are flagged 'moving' from the kick (the trail just sits still during its delay), so once
+            // both settle on (or give up finding) wall, control returns to the player.
             if (_rig.IsMoving(ClimbEffector.LeftFoot) || _rig.IsMoving(ClimbEffector.RightFoot)) return;
 
             float lErr = FootError(ClimbEffector.LeftFoot, out Vector3 lPos, out Quaternion lRot, out bool lOnWall);
@@ -958,10 +963,15 @@ namespace Game.Climbing
             bool lStep = lOnWall && lErr >= footStepThreshold;
             bool rStep = rOnWall && rErr >= footStepThreshold;
 
-            if (lStep) _rig.SetPoseTarget(ClimbEffector.LeftFoot, lPos, lRot, plantStepDuration);
-            if (rStep) _rig.SetPoseTarget(ClimbEffector.RightFoot, rPos, rRot, plantStepDuration);
+            if (!lStep && !rStep) { _phase = Phase.Rappelling; return; }   // both planted (or off-wall) → done
 
-            if (!lStep && !rStep) _phase = Phase.Rappelling;   // both planted (or off-wall) → control returns
+            float stagger = plantStepDuration * plantStaggerFraction;      // trail foot's delayed start
+            bool leftLeads = lErr >= rErr;
+            float lDelay = leftLeads ? 0f : stagger;
+            float rDelay = leftLeads ? stagger : 0f;
+
+            if (lStep) _rig.SetPoseTarget(ClimbEffector.LeftFoot, lPos, lRot, plantStepDuration, lDelay, lDelay);
+            if (rStep) _rig.SetPoseTarget(ClimbEffector.RightFoot, rPos, rRot, plantStepDuration, rDelay, rDelay);
         }
 
         // ─────────────────────────────────────────────── top-out ──
