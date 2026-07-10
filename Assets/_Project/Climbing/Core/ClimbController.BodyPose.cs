@@ -368,6 +368,10 @@ namespace Game.Climbing
             Vector3 leftDir = (Vector3.down - bodyRight * elbowOutward).normalized;   // left elbow: down + left
             Vector3 rightDir = (Vector3.down + bodyRight * elbowOutward).normalized;  // right elbow: down + right
 
+            // Fatigue tremble: a slight horizontal jitter added to each elbow bend as stamina nears empty.
+            leftDir = fatigueJitter.Perturb(leftDir, bodyRight, _jitterStrength, 0f).normalized;
+            rightDir = fatigueJitter.Perturb(rightDir, bodyRight, _jitterStrength, Mathf.PI).normalized;
+
             var lc = solver.leftArmChain.bendConstraint;
             lc.bendGoal = null; lc.direction = leftDir; lc.weight = weight;
             var rc = solver.rightArmChain.bendConstraint;

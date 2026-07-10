@@ -328,6 +328,11 @@ namespace Game.Climbing
             Vector3 leftDir = (awayFromWall - bodyRight * kneeOutward).normalized;      // left knee: out-from-wall + left
             Vector3 rightDir = (awayFromWall + bodyRight * kneeOutward).normalized;     // right knee: out-from-wall + right
 
+            // Fatigue tremble: a slight horizontal jitter added to each knee bend as stamina nears empty
+            // (phase-offset from the elbows so the four limbs don't shake in unison).
+            leftDir = fatigueJitter.Perturb(leftDir, bodyRight, _jitterStrength, Mathf.PI * 0.5f).normalized;
+            rightDir = fatigueJitter.Perturb(rightDir, bodyRight, _jitterStrength, Mathf.PI * 1.5f).normalized;
+
             var lc = solver.leftLegChain.bendConstraint;
             lc.bendGoal = null; lc.direction = leftDir; lc.weight = weight;
             var rc = solver.rightLegChain.bendConstraint;

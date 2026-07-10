@@ -29,6 +29,10 @@ namespace Game.PlayerV2
         [Tooltip("Locks all camera look rotation.")]
         [SerializeField] private bool _lockCameraPosition = false;
 
+        [Header("Pitch Lock (aim look-down)")]
+        [Tooltip("How fast the camera eases into/out of a forced pitch (e.g. rope aim looking at the ground).")]
+        [SerializeField] private float _pitchLockLerpSpeed = 6f;
+
         [Header("Input")]
         [Tooltip("Look input source. Auto-found on this GameObject if left empty.")]
         [SerializeField] private InputHandler _input;
@@ -36,6 +40,18 @@ namespace Game.PlayerV2
         private float _targetYaw;
         private float _targetPitch;
         private bool _frozen;
+
+        // Pitch lock: a forced pitch (e.g. rope aim looking down), eased in/out. The free-look pitch
+        // (_targetPitch) is preserved so releasing the lock returns to exactly where free-look was.
+        private bool _pitchLocked;
+        private float _lockedPitch;
+        private float _pitchLockBlend;   // 0 = free pitch, 1 = fully at _lockedPitch
+
+        // Scripted look override: a caller (e.g. the rappel enter blend) eases the camera from its
+        // current angles to a target direction by advancing a 0→1 progress, ignoring input meanwhile.
+        private bool _lookOverride;
+        private float _ovStartYaw, _ovStartPitch, _ovTargetYaw, _ovTargetPitch;
+        private float _ovYaw, _ovPitch;   // currently applied override angles
 
         private const float _lookThreshold = 0.01f;
 
@@ -62,21 +78,37 @@ namespace Game.PlayerV2
         {
             if (_frozen || _cinemachineCameraTarget == null) return;
 
+            // Scripted orient (e.g. rappel enter blend easing to the character's back): input ignored,
+            // the caller advances the progress; we just apply the eased angles.
+            if (_lookOverride)
+            {
+                _cinemachineCameraTarget.rotation = Quaternion.Euler(
+                    _ovPitch + _cameraAngleOverride, _ovYaw, 0f);
+                return;
+            }
+
+            float dt = Time.deltaTime;
             Vector2 look = _input != null ? _input.LookInput : Vector2.zero;
 
             if (look.sqrMagnitude >= _lookThreshold && !_lockCameraPosition)
             {
                 // Mouse delta is already frame-rate independent; gamepad stick is a rate.
-                float deltaTimeMultiplier = (_input != null && _input.IsCurrentDeviceMouse) ? 1f : Time.deltaTime;
+                float deltaTimeMultiplier = (_input != null && _input.IsCurrentDeviceMouse) ? 1f : dt;
                 _targetYaw += look.x * deltaTimeMultiplier;
-                _targetPitch += look.y * deltaTimeMultiplier;
+                if (!_pitchLocked)                              // vertical look frozen while pitch-locked
+                    _targetPitch += look.y * deltaTimeMultiplier;
             }
 
             _targetYaw = ClampAngle(_targetYaw, float.MinValue, float.MaxValue);
             _targetPitch = ClampAngle(_targetPitch, _bottomClamp, _topClamp);
 
+            // Ease toward the forced pitch (e.g. rope aim). Applied via a blend off the preserved free
+            // pitch, so the override can exceed the normal clamps and releasing eases back without a snap.
+            _pitchLockBlend = Mathf.MoveTowards(_pitchLockBlend, _pitchLocked ? 1f : 0f, _pitchLockLerpSpeed * dt);
+            float appliedPitch = Mathf.Lerp(_targetPitch, _lockedPitch, _pitchLockBlend);
+
             _cinemachineCameraTarget.rotation = Quaternion.Euler(
-                _targetPitch + _cameraAngleOverride, _targetYaw, 0.0f);
+                appliedPitch + _cameraAngleOverride, _targetYaw, 0.0f);
         }
 
         /// <summary>
@@ -105,6 +137,63 @@ namespace Game.PlayerV2
             if (_frozen == frozen) return;
             _frozen = frozen;
             if (!_frozen) ResyncFromTarget();
+        }
+
+        /// <summary>
+        /// Forces the camera pitch to a fixed angle (e.g. rope aim looking down into the ground), easing
+        /// in and out at <see cref="_pitchLockLerpSpeed"/>. Horizontal (yaw) look stays live; vertical
+        /// look input is ignored while locked. The free-look pitch is preserved, so releasing eases back
+        /// to it without a snap. <paramref name="pitchDegrees"/> is applied directly and bypasses the
+        /// normal look clamps (its sign/scale depend on the rig — tune it on the caller).
+        /// </summary>
+        public void SetPitchLock(bool locked, float pitchDegrees)
+        {
+            _pitchLocked = locked;
+            if (locked) _lockedPitch = Mathf.Clamp(pitchDegrees, -89f, 89f);
+        }
+
+        /// <summary>
+        /// Begins a scripted camera orient: from the current look toward <paramref name="worldDir"/>, with
+        /// input ignored. The caller drives it with <see cref="SetLookOverrideProgress"/> (0→1) and ends it
+        /// with <see cref="ReleaseLookOverride"/> (free-look resumes from wherever it landed — no snap).
+        /// Used to settle the camera onto the character's back as the rappel enter blend completes.
+        /// </summary>
+        public void BeginLookOverride(Vector3 worldDir)
+        {
+            if (_cinemachineCameraTarget == null || worldDir.sqrMagnitude < 1e-6f) return;
+
+            Vector3 cur = _cinemachineCameraTarget.rotation.eulerAngles;   // start from the actual visual angle
+            _ovStartYaw = cur.y;
+            _ovStartPitch = NormalizeAngleSigned(cur.x);
+
+            Vector3 e = Quaternion.LookRotation(worldDir.normalized, Vector3.up).eulerAngles;
+            _ovTargetYaw = e.y;
+            _ovTargetPitch = NormalizeAngleSigned(e.x);
+
+            _ovYaw = _ovStartYaw;
+            _ovPitch = _ovStartPitch;
+            // The scripted orient owns pitch outright — drop any aim pitch-lock so it can't reappear on release.
+            _pitchLocked = false;
+            _pitchLockBlend = 0f;
+            _lookOverride = true;
+        }
+
+        /// <summary>Advances the scripted orient (0 = start angles, 1 = fully on the target direction).</summary>
+        public void SetLookOverrideProgress(float t)
+        {
+            if (!_lookOverride) return;
+            t = Mathf.Clamp01(t);
+            _ovYaw = Mathf.LerpAngle(_ovStartYaw, _ovTargetYaw, t);
+            _ovPitch = Mathf.Lerp(_ovStartPitch, _ovTargetPitch, t);
+        }
+
+        /// <summary>Ends the scripted orient; free-look resumes from the angles it ended on.</summary>
+        public void ReleaseLookOverride()
+        {
+            if (!_lookOverride) return;
+            _lookOverride = false;
+            _targetYaw = _ovYaw;
+            _targetPitch = Mathf.Clamp(_ovPitch, _bottomClamp, _topClamp);
         }
 
         private void ResyncFromTarget()

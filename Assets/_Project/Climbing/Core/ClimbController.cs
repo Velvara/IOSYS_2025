@@ -278,6 +278,11 @@ namespace Game.Climbing
         [Tooltip("How far the knees point outward vs straight away from the wall (0 = straight out from wall).")]
         [SerializeField] private float kneeOutward = 0.3f;
 
+        [Header("Fatigue Tremble")]
+        [Tooltip("Growing horizontal jitter on the elbows/knees while moving as stamina nears empty.")]
+        [SerializeField] private FatigueJitter fatigueJitter = new FatigueJitter();
+        private float _jitterStrength;   // this frame's tremble strength (0 = none), computed in TickClimb
+
         [Header("Torso Standoff (keep the body off the surface)")]
         [Tooltip("Forward-probe the surface and push the body out so the torso never clips into a bulging/irregular trunk (hands & feet stay pinned to their holds).")]
         [SerializeField] private bool enableStandoff = true;
@@ -1063,6 +1068,10 @@ namespace Game.Climbing
 
             // Braced↔free-hang blend: fades the leg layer, foot IK and standoff toward 0 in free hang.
             _bracedWeight = Mathf.MoveTowards(_bracedWeight, _freeHang ? 0f : 1f, freeHangBlendSpeed * dt);
+
+            // Fatigue tremble: only while actually moving between holds, growing as stamina nears empty.
+            _jitterStrength = (_stamina != null && _rig.AnyMoving) ? fatigueJitter.Strength(_stamina.NormalizedStamina) : 0f;
+            fatigueJitter.Advance(_jitterStrength, dt);
 
             ApplyGripOffset();
             SetArmBendDirections(elbowBendWeight);

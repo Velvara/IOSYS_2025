@@ -30,6 +30,12 @@ public class RopeAim : AimModeBase
     public Color validColor = new Color(0.2f, 0.5f, 1f, 1f);
     public Color invalidColor = new Color(1f, 0.12f, 0.08f, 1f);
 
+    [Header("Camera")]
+    [Tooltip("While rope-aiming, the camera locks to this pitch (degrees) and looks down at the ground where " +
+             "the anchor will drop. Horizontal look stays free; vertical look is frozen. Tune live — more " +
+             "negative looks further down into the ground on this rig; flip the sign if it tilts the wrong way.")]
+    public float cameraPitchAngle = -45f;
+
     [Header("Input System (injected by AimManager)")]
     public PlayerInput playerInput;
 
@@ -75,6 +81,9 @@ public class RopeAim : AimModeBase
     {
         base.EnterMode();
 
+        // Tilt the camera down to look at the ground where the anchor drops; horizontal look stays free.
+        CameraState?.SetPitchLock(true, cameraPitchAngle);
+
         if (animator)
             animator.CrossFade("ThrowPose", 0.2f, animator.GetLayerIndex("AimingUpperBody"));
 
@@ -108,6 +117,8 @@ public class RopeAim : AimModeBase
     public override void ExitMode()
     {
         base.ExitMode();
+
+        CameraState?.SetPitchLock(false, 0f);   // release the look-down; eases back to free-look pitch
 
         if (animator)
         {
