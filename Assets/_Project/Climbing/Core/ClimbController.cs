@@ -677,10 +677,11 @@ namespace Game.Climbing
         /// (Use-near-a-rope hands the body off into rappel) — nothing to do here.</summary>
         private void OnUseInput(InputAction.CallbackContext ctx)
         {
-            if (_isClimbing) return;                        // BracedReady is on Jump now; rope handoff is RopeController's
-            if (_input != null && _input.AimHeld) return;   // Use fires a tool while aiming — don't also grab
-            if (_ragdoll != null && _ragdoll.IsRagdolled) return;   // that press is the ragdoll recovery, not a grab
+            if (_isClimbing) { if (logClimbEvents) Debug.Log("[ClimbDiag] Use ignored — already climbing."); return; }                        // BracedReady is on Jump now; rope handoff is RopeController's
+            if (_input != null && _input.AimHeld) { if (logClimbEvents) Debug.Log("[ClimbDiag] Use ignored — AimHeld (tool fires)."); return; }   // Use fires a tool while aiming — don't also grab
+            if (_ragdoll != null && _ragdoll.IsRagdolled) { if (logClimbEvents) Debug.Log("[ClimbDiag] Use ignored — ragdolled."); return; }   // that press is the ragdoll recovery, not a grab
             _useBufferTimer = useBufferTime;                // buffered: Update grabs when a candidate is in reach (incl. mid-jump catch)
+            if (logClimbEvents) Debug.Log("[ClimbDiag] Use pressed — buffered; waiting for a candidate in reach.");
         }
 
         /// <summary>Jump: enter BracedReady from a braced climb; press again in BracedReady to launch the
@@ -818,12 +819,22 @@ namespace Game.Climbing
             int hitCount = Physics.OverlapSphereNonAlloc(origin, detectRadius, _candidateHits,
                                                          climbableLayers, QueryTriggerInteraction.Ignore);
 
+            // --- TEMP DIAGNOSTIC (remove once the grab issue is resolved) ---
+            bool diag = logClimbEvents && _useBufferTimer > 0f;
+            int dSurfaces = 0, dNoReady = 0, dOutReach = 0, dTooVertical = 0, dNotFacing = 0, dAccepted = 0;
+            float dNearest = float.MaxValue, dNearestFace = 0f;
+            var dHits = diag ? new System.Text.StringBuilder() : null;
+
             float best = float.MaxValue;
             for (int h = 0; h < hitCount; h++)
             {
-                ClimbableSurface s = _candidateHits[h].GetComponentInParent<ClimbableSurface>();
+                Collider col = _candidateHits[h];
+                ClimbableSurface s = col.GetComponentInParent<ClimbableSurface>();
                 _candidateHits[h] = null;   // don't pin dead colliders across scans
-                if (s == null || !s.HoldsReady) continue;
+                if (diag) dHits.Append($"  [{col.name}] layer={LayerMask.LayerToName(col.gameObject.layer)}({col.gameObject.layer}) climbable={(s != null ? s.name : "NONE")}\n");
+                if (s == null) continue;
+                if (!s.HoldsReady) { if (diag) dNoReady++; continue; }
+                if (diag) dSurfaces++;
 
                 Transform st = s.transform;
                 var holds = s.Holds;
@@ -831,22 +842,32 @@ namespace Game.Climbing
                 {
                     Vector3 wp = st.TransformPoint(holds[i].LocalPosition);
                     float d = Vector3.Distance(origin, wp);
-                    if (d > maxReach || d >= best) continue;
+                    if (diag && d < dNearest) { dNearest = d; dNearestFace = Vector3.Angle(transform.forward, -((st.rotation * holds[i].LocalRotation) * Vector3.forward)); }
+                    if (d > maxReach) { if (diag) dOutReach++; continue; }
+                    if (d >= best) continue;
 
                     Quaternion wr = st.rotation * holds[i].LocalRotation;
                     Vector3 outward = wr * Vector3.forward;   // hold forward = outward grab normal
 
                     // Reject floors/ceilings: the grab normal must be roughly horizontal.
-                    if (Vector3.Angle(outward, Vector3.up) < minWallAngle) continue;
+                    if (Vector3.Angle(outward, Vector3.up) < minWallAngle) { if (diag) dTooVertical++; continue; }
                     // Must be roughly facing into the wall.
-                    if (Vector3.Angle(transform.forward, -outward) > maxGrabAngle) continue;
+                    if (Vector3.Angle(transform.forward, -outward) > maxGrabAngle) { if (diag) dNotFacing++; continue; }
 
+                    if (diag) dAccepted++;
                     best = d;
                     pos = wp;
                     rot = wr;
                     surface = s;
                 }
             }
+
+            if (diag && surface == null)
+                Debug.Log($"[ClimbDiag] No grab. OverlapSphere colliders={hitCount}, climbableSurfaces(ready)={dSurfaces}, notReady={dNoReady}. " +
+                          $"Holds rejected: outOfReach(>{maxReach}m)={dOutReach}, tooVertical(<{minWallAngle}°)={dTooVertical}, notFacing(>{maxGrabAngle}°)={dNotFacing}. " +
+                          $"Nearest hold {(dNearest < float.MaxValue ? dNearest.ToString("0.00") + "m, facing " + dNearestFace.ToString("0") + "°" : "none")}.\n" +
+                          $"Colliders in range (climbableLayers mask):\n{dHits}");
+            // --- END DIAGNOSTIC ---
 
             return surface != null;
         }

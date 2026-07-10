@@ -54,8 +54,61 @@ namespace Game.Climbing
                 TryStepHand(!primaryRight, rhPos, lhPos, traverseDir, avgOut))
                 StartBracedTurn();   // begin the per-step rotation tween toward the new facing
             else
+            {
+                if (logClimbEvents) DiagTraversal(primaryRight, rhPos, lhPos, traverseDir, avgOut);   // TEMP
                 _moveCooldown = traverseRetryInterval;   // stuck — don't rescan every hold every frame
+            }
         }
+
+        // --- TEMP DIAGNOSTIC (remove once the kit-bash seam issue is resolved) ---
+        // When a braced step fails, tally WHY every hold was rejected for the trailing hand, and report the
+        // best facing dot among holds that are otherwise reachable — so we can see if facingCoherence (the
+        // same-face filter) is what's blocking the cross onto an intersecting piece, vs reach/progress.
+        private void DiagTraversal(bool moveRight, Vector3 rhPos, Vector3 lhPos, Vector3 traverseDir, Vector3 climberOut)
+        {
+            var s = _currentSurface;
+            if (s == null || !s.HoldsReady) { Debug.Log("[ClimbDiag] stuck — no ready surface."); return; }
+
+            Vector3 fromPos = moveRight ? rhPos : lhPos;
+            Vector3 otherPos = moveRight ? lhPos : rhPos;
+            Vector3 bodyRight = transform.right;
+            float sideSign = moveRight ? 1f : -1f;
+            bool closeGap = Vector3.Distance(rhPos, lhPos) > maxHandSeparation;
+            float minProgress = closeGap ? -1f : progressDot;
+
+            Transform st = s.transform;
+            var holds = s.Holds;
+            float minSqr = minStepDistance * minStepDistance, maxSqr = maxStepReach * maxStepReach;
+            float clearSqr = handClearance * handClearance, maxSepSqr = maxHandSeparation * maxHandSeparation;
+            int outReach = 0, tooClose = 0, farOther = 0, tooCloseOther = 0, crossed = 0, noProg = 0, wrongFace = 0, ok = 0;
+            float bestFaceDot = -2f;   // best facing dot among holds that pass everything EXCEPT the face filter
+
+            for (int i = 0; i < holds.Count; i++)
+            {
+                Vector3 wp = st.TransformPoint(holds[i].LocalPosition);
+                Vector3 fromDelta = wp - fromPos;
+                float fromSqr = fromDelta.sqrMagnitude;
+                if (fromSqr < minSqr) { tooClose++; continue; }
+                if (fromSqr > maxSqr) { outReach++; continue; }
+                Vector3 toOther = wp - otherPos;
+                float otherSqr = toOther.sqrMagnitude;
+                if (otherSqr < clearSqr) { tooCloseOther++; continue; }
+                if (otherSqr > maxSepSqr) { farOther++; continue; }
+                if (Vector3.Dot(toOther, bodyRight) * sideSign < -crossMargin) { crossed++; continue; }
+                if (Vector3.Dot(fromDelta.normalized, traverseDir) < minProgress) { noProg++; continue; }
+                float fdot = Vector3.Dot((st.rotation * holds[i].LocalRotation) * Vector3.forward, climberOut);
+                if (fdot > bestFaceDot) bestFaceDot = fdot;
+                if (fdot < facingCoherence) { wrongFace++; continue; }
+                ok++;
+            }
+
+            Debug.Log($"[ClimbDiag] Braced step STUCK ({(moveRight ? "R" : "L")} hand, closeGap={closeGap}). Rejected: " +
+                      $"outOfReach={outReach}, tooClose={tooClose}, tooCloseToOther={tooCloseOther}, farFromOther={farOther}, " +
+                      $"crossed={crossed}, noProgress={noProg}, wrongFace(<{facingCoherence})={wrongFace}, ACCEPTED={ok}. " +
+                      $"Best facing dot among reachable = {(bestFaceDot > -2f ? bestFaceDot.ToString("0.00") : "none in reach")} " +
+                      $"(need ≥ {facingCoherence}). If wrongFace is high and best dot < {facingCoherence}, the same-face filter is the blocker.");
+        }
+        // --- END DIAGNOSTIC ---
 
         /// <summary>
         /// Attempts to step one hand to a new hold for the current input direction. Handles the
