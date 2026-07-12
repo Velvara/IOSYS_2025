@@ -94,6 +94,21 @@ namespace Game.Climbing
 
             transform.position = Vector3.Lerp(freePos, bracedPos, _bracedWeight);
 
+            // Reach-attach pin (slide end): the formula above wants the body hanging under the hold
+            // midpoint, but with no input the body must stay EXACTLY where the slide stopped — so the
+            // pin overrides the formula outright (a constant offset wouldn't do: the hand-average moves
+            // during the reach, so formula+offset would still drift). The first hand step releases the
+            // pin; the pin-to-formula difference is captured that frame and decays across the step.
+            if (instant) { _attachOffsetHold = false; _attachOffsetT = 1f; }
+            else if (_attachOffsetHold)
+                transform.position = _attachPinPos;
+            else if (_attachOffsetT < 1f)
+            {
+                if (_attachOffsetT == 0f) _attachBodyOffset = _attachPinPos - transform.position;   // capture at release
+                _attachOffsetT = Mathf.Min(1f, _attachOffsetT + Time.deltaTime / _attachOffsetDur);
+                transform.position += _attachBodyOffset * (1f - Mathf.SmoothStep(0f, 1f, _attachOffsetT));
+            }
+
             // Torso standoff push — gated by `enableStandoff` and scaled by _bracedWeight (no push in free hang).
             ApplyStandoff(avgOut, instant);
         }
@@ -302,6 +317,17 @@ namespace Game.Climbing
             _rotTweenT = 0f;
         }
 
+        /// <summary>Releases the held reach-attach bridge offset (slide end pin): starts its decay over
+        /// <paramref name="duration"/>. Called by the FIRST hand step after a slide attach — the body is
+        /// moving with the step anyway, so the correction disappears into it.</summary>
+        private void ReleaseAttachOffset(float duration)
+        {
+            if (!_attachOffsetHold) return;
+            _attachOffsetHold = false;
+            _attachOffsetT = 0f;
+            _attachOffsetDur = Mathf.Max(0.0001f, duration);
+        }
+
         /// <summary>
         /// Picks the braced vs free-hang pose from surface orientation. A single scalar —
         /// Dot(outwardNormal, up) — captures it: ≈0 = vertical wall (braced), strongly negative =
@@ -312,6 +338,14 @@ namespace Game.Climbing
         /// </summary>
         private void UpdatePoseSwitch()
         {
+            // Post-slide hands-only attach (no wall at the feet — e.g. the bottom lip of a wall): stay
+            // in free hang whatever the hold orientation says, until the feet-height probe finds wall.
+            if (_postSlideFreeHang)
+            {
+                if (!SlideFeetWallCheck()) return;
+                _postSlideFreeHang = false;
+            }
+
             float d = Vector3.Dot(AvgOutward(), Vector3.up);
             if (!_freeHang && d < freeHangEnterDot) PlayPose(true, instant: false);
             else if (_freeHang && d > freeHangExitDot) PlayPose(false, instant: false);

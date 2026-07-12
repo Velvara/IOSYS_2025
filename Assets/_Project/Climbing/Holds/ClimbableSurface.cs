@@ -63,6 +63,14 @@ namespace Game.Climbing
         /// <summary>Authored = parsed/baked cliff; Procedural = pushed at runtime (e.g. a Flora trunk).</summary>
         public ClimbHoldSource Source => _source;
 
+        /// <summary>How this surface climbs: Trunk (procedural Flora), Free (vertex-per-hold bake) or
+        /// Ledge (edge/protrusion bake). Trunks classify by hold source; authored surfaces read the
+        /// type stamped into their baked <see cref="HoldDataSO"/>. Per-type rules land later — this
+        /// is the identity they'll hang off (the entry slide already keys on Free).</summary>
+        public ClimbType Type => _source == ClimbHoldSource.Procedural
+            ? ClimbType.Trunk
+            : (holdData != null ? holdData.surfaceType : ClimbType.Free);
+
         /// <summary>
         /// The bake mesh the editor bake tool parses. Resolution order: explicit <see cref="bakeMeshFilter"/>
         /// → a child tagged <c>EditorOnly</c> (the real pipeline) → a MeshFilter on this object → the first

@@ -35,6 +35,7 @@ namespace Game.Climbing
         private bool TryMantle()
         {
             if (!enableMantle || _mantling) return false;
+            if (_handsPending) return false;   // post-slide dormant hang: effectors stale (IK off) — the top test would misjudge
             if (IsTrunk && !mantleOnTrunks) return false;   // trunks don't top-out (no standable tip)
             // Two ways to be "at a top": the holds tilt up (trunk tip) OR there's no reachable hold above
             // (a parsed vertical cliff's top holds face HORIZONTALLY, so the orientation test alone misses it).

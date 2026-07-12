@@ -185,11 +185,14 @@ namespace Game.Climbing.Editor
 
                 HoldDataSO so = GetOrCreateAsset(surface);
                 so.holds = holds.ToArray();
+                // Bake mode = climb type: vertex-per-hold proxies climb as FREE surfaces (entry slide
+                // etc.), edge detection yields LEDGE surfaces. Trunks never pass through here.
+                so.surfaceType = _mode == BakeMode.EveryVertex ? ClimbType.Free : ClimbType.Ledge;
                 EditorUtility.SetDirty(so);
                 AssignHoldData(surface, so);
                 EditorUtility.SetDirty(surface);
                 baked++;
-                Debug.Log($"[ClimbBake] '{surface.name}' → {holds.Count} holds → {AssetDatabase.GetAssetPath(so)}", surface);
+                Debug.Log($"[ClimbBake] '{surface.name}' → {holds.Count} holds ({so.surfaceType}) → {AssetDatabase.GetAssetPath(so)}", surface);
             }
 
             AssetDatabase.SaveAssets();

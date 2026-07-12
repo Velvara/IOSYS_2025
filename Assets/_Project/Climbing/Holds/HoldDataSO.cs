@@ -18,6 +18,11 @@ namespace Game.Climbing
         [Tooltip("Baked handholds in the climbable's local space.")]
         public ClimbHoldData[] holds = System.Array.Empty<ClimbHoldData>();
 
+        [Tooltip("How this surface climbs — stamped by the bake window (Every Vertex → Free, " +
+                 "Ledge Edges → Ledge). Assets baked before this field existed default to Free; " +
+                 "re-bake or set it here for old ledge bakes.")]
+        public ClimbType surfaceType = ClimbType.Free;
+
         public int Count => holds != null ? holds.Length : 0;
     }
 }

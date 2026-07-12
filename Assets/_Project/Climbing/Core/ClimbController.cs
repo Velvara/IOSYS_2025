@@ -22,6 +22,7 @@ namespace Game.Climbing
     ///   ClimbController.BodyPose.cs   body orientation/position, pendulum, standoff, spine/head, grip offsets
     ///   ClimbController.PeekJump.cs   BracedReady peek, jump-off, arc camera, trajectory preview
     ///   ClimbController.Mantle.cs     reach-top mantle + get-up, reach-bottom step-off
+    ///   ClimbController.Slide.cs      entry slide (falling grab on FREE surfaces), attach prompt, enter animation
     ///
     /// Runs after PlayerController (DefaultExecutionOrder) so the free-look re-enable sticks the same
     /// frame the FSM freezes look on entry.
@@ -103,6 +104,39 @@ namespace Game.Climbing
         [SerializeField] private float minWallAngle = 45f;
         [Tooltip("How often (Hz) to scan for a grab candidate while free. The scan runs every frame while a buffered Use press or the post-jump catch window is live, so grab responsiveness is unaffected.")]
         [SerializeField] private float candidateScanHz = 10f;
+
+        [Header("Entry Slide (FREE surfaces — a falling grab slides down the wall)")]
+        [Tooltip("Master toggle. A grab with DOWNWARD velocity on a Free-type surface slides down the wall before the hands attach; rising or grounded grabs never slide. Trunks and Ledge surfaces grab exactly as before.")]
+        [SerializeField] private bool enableSlide = true;
+        [Tooltip("Downward entry speed (m/s, x) → total slide distance (m, y). Left of the first key = no slide; keep the first key ABOVE 2 m/s (the motor reports −2 m/s while grounded). More speed = longer slide.")]
+        [SerializeField] private AnimationCurve slideDistanceByVelocity = AnimationCurve.Linear(3f, 0f, 12f, 6f);
+        [Tooltip("Normalized slide shape: x = 0..1 of slideDuration → y = 0..1 of the total distance. Authored EASE-OUT (steep start, flat end) so the slide starts fast and decelerates to a stop.")]
+        [SerializeField] private AnimationCurve slideProgressCurve = new AnimationCurve(new Keyframe(0f, 0f, 0f, 2f), new Keyframe(1f, 1f, 0f, 0f));
+        [Tooltip("Seconds a slide takes start→stop (same for every slide — a longer distance just slides faster, preserving the momentum feel).")]
+        [SerializeField] private float slideDuration = 0.9f;
+        [Tooltip("Brake testing toggle — off = holding Use never slows the slide (the grab press can't accidentally brake).")]
+        [SerializeField] private bool enableSlideBrake = true;
+        [Tooltip("While Use is HELD the slide advances at this fraction of its normal speed (0.5 = half, 0 = holding stops it dead). Releasing returns to full speed instantly; distance not travelled while braking is simply never covered (the slide still ends on the same clock).")]
+        [Range(0f, 1f)]
+        [SerializeField] private float brakeSpeedFactor = 0.5f;
+        [Tooltip("The slide needs a hold within this radius of the chest to keep going — past the last holds (an overhang lip / the surface's edge) the climber falls immediately.")]
+        [SerializeField] private float slideHoldRadius = 1.2f;
+        [Tooltip("Max wall-probe distance (chest → wall) while sliding; the wall counts as lost beyond it (→ fall).")]
+        [SerializeField] private float slideWallProbe = 1.2f;
+        [Tooltip("Height above the player root of the feet-wall probe at slide end: wall there = braced entry; air (hands-only, e.g. the bottom lip of a wall) = free-hang entry, held until the feet find wall.")]
+        [SerializeField] private float slideFeetProbeHeight = 0.35f;
+        [Tooltip("Optional particle systems (e.g. on the hands, world-space distance emission) played while sliding: Play on slide start, Stop (emission only) at slide end — live particles fade out naturally. PERF TIP: set each system's main-module Stop Action to Disable so the GameObject deactivates itself once the last particle dies; this code re-activates it on the next slide.")]
+        [SerializeField] private ParticleSystem[] slideParticles;
+
+        [Header("Attach Prompt (world-space grab marker)")]
+        [Tooltip("Show a world-space marker at the hold the character would attach to if Use were pressed (normal locomotion + airborne), updated every frame while a candidate exists.")]
+        [SerializeField] private bool showAttachPrompt = true;
+        [Tooltip("Optional marker prefab (billboarded to the camera by code). Leave null for the placeholder white square.")]
+        [SerializeField] private GameObject attachPromptPrefab;
+        [Tooltip("World size (m) of the marker.")]
+        [SerializeField] private float attachPromptSize = 0.15f;
+        [Tooltip("Lift off the surface along the hold normal so the marker never z-fights the wall.")]
+        [SerializeField] private float attachPromptSurfaceOffset = 0.06f;
 
         [Header("Climb Pose (animator ClimbingLayer + ClimbLegsLayer)")]
         [Tooltip("How fast braced↔free-hang blends the leg-layer weight, foot-IK weight and standoff toward 0 in free hang. Roughly match your animator transition-clip length.")]
@@ -475,6 +509,42 @@ namespace Game.Climbing
         private bool _releasing;
         private float _masterWeightTarget;
 
+        // -- Entry slide (falling grab on a FREE surface: the body rides the wall down before the hands attach) --
+        private bool _sliding;
+        private float _slideElapsed;
+        private float _slideTotalDist;         // from slideDistanceByVelocity(entry speed)
+        private float _slideDistSoFar;         // distance already applied
+        private float _slideSpeed;             // current m/s — handed back to the motor if the slide ends in a fall
+        private bool _slideBraking;            // Use currently held — this frame advances at brakeSpeedFactor
+        private float _slideBasePos;           // un-braked curve position (per-frame integration reference)
+        private bool _handsPending;            // slide stopped, holds found but NOT attached — hands stay animation-driven until input
+        private Vector3 _pendingRightPos;      // remembered right-hand hold for the deferred reach (Jump path)
+        private Quaternion _pendingRightRot = Quaternion.identity;
+        private bool _rHandAttached = true;    // per-limb lazy attach after a slide: a hand keeps following the
+        private bool _lHandAttached = true;    // animation (effector weight 0) until ITS first step targets a hold
+        private Vector3 _attachPinPos;         // reach attach: the slide's stop position — body held HERE until the first hand step
+        private bool _attachOffsetHold;        // body pinned at _attachPinPos (overrides the hang formula)
+        private Vector3 _attachBodyOffset;     // pin − formula, captured at release; decays across the first step
+        private float _attachOffsetT = 1f;     // decay progress once released (1 = fully decayed / inactive)
+        private float _attachOffsetDur = 0.0001f;
+        private Vector3 _slideWallNormal = Vector3.forward;  // outward wall normal, re-probed while sliding
+        private bool _postSlideFreeHang;       // slide ended hands-only (no wall at the feet) → hold free hang until the feet find wall
+
+        // -- Enter animation (ClimbEnter clip on every grab; freezes at the OnClimbEnterHold event while sliding) --
+        private bool _entering;                // ClimbEnter currently owns the layer (until the clip completes)
+        private bool _enterFrozen;             // frozen at the event frame (slide in progress)
+        private float _enterResumeFixedTime;   // fixed seconds into the clip to resume from after a brake detour
+        private float _enterLayerFloor;        // keeps the ClimbingLayer visible while the IK weight is still 0 (slide)
+        private bool _hasClimbEnterState, _hasSlideBrakeState, _hasEnterSpeedParam;   // authored animator pieces present?
+        private InputAction _useAction;        // polled for the brake (hold-Use); grabs stay event-driven
+        private static readonly int _hClimbEnter = Animator.StringToHash("ClimbEnter");
+        private static readonly int _hClimbSlideBrake = Animator.StringToHash("ClimbSlideBrake");
+        private static readonly int _hClimbEnterSpeed = Animator.StringToHash("ClimbEnterSpeed");
+
+        // -- Attach prompt (world-space marker at the current grab candidate) --
+        private Transform _prompt;
+        private bool _promptOnCharacter;       // parented to the body for the slide's brake window
+
         // -- Mantle / reach-top (scripted body move onto the ledge, finalized by OnMantleComplete) --
         private bool _mantling;
         private float _mantleTimer;
@@ -611,6 +681,22 @@ namespace Game.Climbing
         private void Start()
         {
             if (ik != null) ik.enabled = false;
+
+            // Enter-animation setup (optional until authored): a ClimbEnter state on the ClimbingLayer
+            // whose speed Multiplier is the ClimbEnterSpeed float (that's what freezes the clip at the
+            // slide-hold frame), plus a ClimbSlideBrake state for the brake pose. Missing pieces degrade
+            // gracefully — no enter clip / no freeze / no brake pose — so the slide works regardless.
+            if (_animator != null && _climbLayerIndex >= 0)
+            {
+                _hasClimbEnterState = _animator.HasState(_climbLayerIndex, _hClimbEnter);
+                _hasSlideBrakeState = _animator.HasState(_climbLayerIndex, _hClimbSlideBrake);
+                foreach (var p in _animator.parameters)
+                    if (p.nameHash == _hClimbEnterSpeed) { _hasEnterSpeedParam = true; break; }
+                if (!_hasClimbEnterState)
+                    Debug.LogWarning("[ClimbController] ClimbingLayer has no 'ClimbEnter' state — grabs snap straight to the hang pose (no enter animation).");
+                else if (!_hasEnterSpeedParam)
+                    Debug.LogWarning("[ClimbController] Animator has no 'ClimbEnterSpeed' float — the enter clip can't freeze at the slide-hold frame (add the param and set it as the ClimbEnter state's speed Multiplier).");
+            }
         }
 
         // Smear the feet onto the surface right BEFORE FinalIK solves, so we read the animator's posed
@@ -639,6 +725,7 @@ namespace Game.Climbing
             {
                 var use = _playerInput.actions["Use"];
                 if (use != null) use.performed += OnUseInput;
+                _useAction = use;   // also POLLED while sliding (hold-Use = brake)
                 var jump = _playerInput.actions["Jump"];
                 if (jump != null) jump.performed += OnJumpInput;
                 _cancelAction = _playerInput.actions["Cancel"];
@@ -669,6 +756,7 @@ namespace Game.Climbing
                 if (jump != null) jump.performed -= OnJumpInput;
             }
             _cancelAction = null;
+            _useAction = null;
 
             if (_ragdoll != null) _ragdoll.RagdollStarting -= OnRagdollStarting;
         }
@@ -688,7 +776,17 @@ namespace Game.Climbing
         /// jump-off (wind-up → ClimbJump clip → leave-wall event → launch).</summary>
         private void OnJumpInput(InputAction.CallbackContext ctx)
         {
-            if (!_isClimbing || _releasing || _mantling || _gettingUp) return;
+            if (!_isClimbing || _releasing || _mantling || _gettingUp || _sliding) return;
+
+            // Post-slide dormant hang: one Jump press attaches both hands AND enters the peek — the
+            // hands finish their reach while the BracedReady turn eases in (the peek only needs the
+            // wall ray + hand-average, and the loosened-hand offset rides the tweening effector).
+            if (_handsPending)
+            {
+                BeginDeferredReach();
+                if (!_freeHang && !_climbJumping) EnterBracedReady();
+                return;
+            }
 
             if (_mode == ClimbMode.BracedReady)
             {
@@ -704,7 +802,7 @@ namespace Game.Climbing
         /// climbReleaseHoldTime releases the climb entirely from any climbing state.</summary>
         private void TickCancelInput(float dt)
         {
-            if (_cancelAction == null || !_isClimbing ||
+            if (_cancelAction == null || !_isClimbing || _sliding ||
                 _releasing || _mantling || _gettingUp || _climbJumping || _jumpAirborne)
             {
                 _cancelHoldTimer = 0f;
@@ -741,7 +839,7 @@ namespace Game.Climbing
         /// if the climb can't be released right now (a scripted mantle/jump is running).</summary>
         public bool ReleaseForHandoff()
         {
-            if (!_isClimbing || _releasing || _mantling || _gettingUp || _climbJumping || _jumpAirborne)
+            if (!_isClimbing || _releasing || _mantling || _gettingUp || _climbJumping || _jumpAirborne || _sliding)
                 return false;
             _rig?.SetMasterWeight(0f);
             FinishRelease();   // control released, layers zeroed, IK asleep — rappel re-enables its own IK
@@ -772,7 +870,9 @@ namespace Game.Climbing
                 (_ragdoll == null || !_ragdoll.IsRagdolled))
             {
                 _candidateScanTimer -= Time.deltaTime;
-                if (_useBufferTimer > 0f || _jumpAirborne || _candidateScanTimer <= 0f)
+                // Also every frame while a candidate is LIVE: the attach prompt sits on the candidate
+                // and must track it frame-accurately (10 Hz only paces the idle discovery scan).
+                if (_useBufferTimer > 0f || _jumpAirborne || _hasCandidate || _candidateScanTimer <= 0f)
                 {
                     _hasCandidate = TryFindCandidate(out _candidatePos, out _candidateRot, out _candidateSurface);
                     _candidateScanTimer = candidateScanHz > 0f ? 1f / candidateScanHz : 0f;
@@ -787,6 +887,10 @@ namespace Game.Climbing
                 Grab();
                 _useBufferTimer = 0f;
             }
+
+            // World-space attach prompt at the current candidate (a grab this frame re-routes it:
+            // slide entries parent it to the body, calm grabs hide it).
+            UpdateAttachPrompt();
 
             if (enableDebugToggle && Keyboard.current != null &&
                 Keyboard.current[debugToggleKey].wasPressedThisFrame)
@@ -882,20 +986,13 @@ namespace Game.Climbing
         }
 
         /// <summary>
-        /// Snap-grab onto the current candidate: take the body over, face the wall, snap both hands to
-        /// holds (legs/body stay IK-free for a free-hang), position the body below the hands, and fade
-        /// FBBIK weight in. Traversal, feet/braced, slide and dynamics come in later increments.
+        /// Grab onto the current candidate: take the body over, then either attach immediately (snap
+        /// both hands to holds, fade FBBIK in) or — falling onto a FREE-type surface — enter the entry
+        /// slide first, attaching only where the slide stops (ClimbController.Slide.cs owns that phase).
         /// </summary>
         private void Grab()
         {
             if (_isClimbing || _controlLock == null || _rig == null || _candidateSurface == null) return;
-
-            // The FBBIK solver sleeps while not climbing (perf + clean animation-event bone reads) — wake it.
-            if (ik != null && !ik.enabled)
-            {
-                if (!ik.solver.initiated) ik.GetIKSolver().Initiate(ik.transform);   // belt & braces (Start order covers this)
-                ik.enabled = true;
-            }
 
             // Reattaching mid-jump: blend the camera back to free-look (over the new climb). Prime the
             // free-look root to face INTO the new wall first, so the blend settles in the normal
@@ -912,26 +1009,6 @@ namespace Game.Climbing
                 RestoreBracedReadyCamera();   // blends Camera.main back to the (primed) free-look
             }
 
-            Vector3 rightPos = _candidatePos;
-            Quaternion rightRot = _candidateRot;
-            Vector3 rightOut = rightRot * Vector3.forward;        // hold forward = outward grab normal
-
-            // Into-surface direction (flattened) for the shoulder-width offset of the second hand.
-            Vector3 intoFlat = Vector3.ProjectOnPlane(-rightOut, Vector3.up);
-            intoFlat = intoFlat.sqrMagnitude > 1e-4f ? intoFlat.normalized : -rightOut;
-            Vector3 right = Vector3.Cross(Vector3.up, intoFlat).normalized;
-
-            Vector3 leftTarget = rightPos - right * shoulderWidth;
-            if (!FindHoldNear(_candidateSurface, leftTarget, rightPos, out Vector3 leftPos, out Quaternion leftRot))
-            {
-                leftPos = leftTarget;        // no distinct hold nearby — place beside the right hand
-                leftRot = rightRot;
-            }
-            _rhOutward = rightOut;
-            _lhOutward = leftRot * Vector3.forward;
-            _rhUp = rightRot * Vector3.up;
-            _lhUp = leftRot * Vector3.up;
-
             // Take over.
             _controlLock.RequestExternalControl();
             _isClimbing = true;
@@ -940,25 +1017,6 @@ namespace Game.Climbing
             _moveCooldown = 0f;
             _oscillators?.ResetAll();
             _stamina?.SetClimbState(true, false);
-
-            // Snap hands (pure hold rotation; grip offset applied live at write time). Feet + body
-            // stay IK-free (free-hang).
-            _rig.SnapToPose(ClimbEffector.RightHand, rightPos, rightRot);
-            _rig.SnapToPose(ClimbEffector.LeftHand, leftPos, leftRot);
-            _rig.SetEffectorWeight(ClimbEffector.RightHand, 1f);
-            _rig.SetEffectorWeight(ClimbEffector.LeftHand, 1f);
-            _rig.SetEffectorWeight(ClimbEffector.LeftFoot, 0f);
-            _rig.SetEffectorWeight(ClimbEffector.RightFoot, 0f);
-            _rig.SetEffectorWeight(ClimbEffector.RootBody, 0f);
-            _lFootWeight = _rFootWeight = 0f;   // feet start dangling; UpdateFeet plants them
-            _footCooldown = 0f;
-            _lFootHoldIdx = _rFootHoldIdx = -1;
-            _standoffPush = 0f;
-            _headLookInit = false;
-            _legBlend = Vector2.zero;
-            _lFootLocked = _rFootLocked = false;
-            _footSmoothInit[0] = _footSmoothInit[1] = false;
-            _pendulumAccumulator = 0f;
             _mode = ClimbMode.Climbing;
             _readyT = 0f;
             _readyReturning = false;
@@ -969,26 +1027,32 @@ namespace Game.Climbing
             _jumpAirborne = false;
             _jumpReattachBlocked = false;
             _jumpTurnT = 1f;
-            ApplyGripOffset();
-
-            _freeHangFacing = intoFlat.sqrMagnitude > 1e-4f ? intoFlat.normalized : transform.forward;
-            _freeHangBodyRot = Quaternion.LookRotation(_freeHangFacing, Vector3.up);
-
-            ConfigurePendulum();
-            _pendulum?.Reset(_rig.HandAverage);
-            UpdateBodyPose(instant: true);
-
-            // Seed the feet under the hips (dangling, weight 0) so the first plant steps in from a sane
-            // spot instead of swooping from the world origin.
-            Vector3 hipG = HipPosition;
-            Vector3 brG = transform.right;
-            _rig.SnapToPose(ClimbEffector.LeftFoot, hipG - Vector3.up * footDrop - brG * footSide, transform.rotation);
-            _rig.SnapToPose(ClimbEffector.RightFoot, hipG - Vector3.up * footDrop + brG * footSide, transform.rotation);
-
-            // Animator: enter the climb pose layer and pick the initial braced/free pose by orientation.
+            _postSlideFreeHang = false;
+            _enterLayerFloor = 0f;
             if (_animator != null) _animator.SetBool(_hIsClimbing, true);
+
+            // ENTRY SLIDE: a grab while FALLING onto a Free-type surface rides the wall down first —
+            // the hands only attach where the slide stops. Rising/grounded grabs (vy ≥ 0 / −2 stick
+            // velocity, below the curve's first key) and Trunk/Ledge surfaces attach immediately.
+            float vy = _motor != null ? _motor.VerticalVelocity : 0f;
+            if (enableSlide && vy < 0f && _candidateSurface.Type == ClimbType.Free)
+            {
+                float dist = slideDistanceByVelocity.Evaluate(-vy);
+                if (dist > 0.05f)
+                {
+                    BeginEntrySlide(dist, vy);
+                    return;
+                }
+            }
+
+            HidePrompt();
+            AttachHands(_candidatePos, _candidateRot);
+
+            // Animator: enter the climb pose layer and pick the initial braced/free pose by orientation;
+            // the ClimbEnter clip (when authored) overrides the pose state and blends into it on finish.
             _freeHang = Vector3.Dot(AvgOutward(), Vector3.up) < freeHangEnterDot;
             PlayPose(_freeHang, instant: true);
+            PlayEnterAnim();
 
             _rig.SetMasterWeight(0f);
             _masterWeightTarget = 1f;
@@ -997,12 +1061,159 @@ namespace Game.Climbing
             if (logClimbEvents) Debug.Log($"[ClimbController] Grab on {_currentSurface.Source} surface ({_currentSurface.name}).");
         }
 
+        /// <summary>
+        /// Shared attach: wake FBBIK, put both hands on holds around the right-hand hold, reset the
+        /// feet/pendulum/standoff bookkeeping, and place the body for the new hands. Two modes:
+        /// SNAP (normal grab — hands lock to the holds, body repositions instantly under them) and
+        /// REACH (<paramref name="reachFromCurrent"/>, the slide's deferred attach — the body must NOT
+        /// move: the hand effectors seed at the exact midpoint that makes the body-pose formula
+        /// reproduce the current transform, then TWEEN to the real holds; the body follows the moving
+        /// hand-average continuously and the visible hands blend in over the IK master-weight fade).
+        /// </summary>
+        private void AttachHands(Vector3 rightPos, Quaternion rightRot, bool reachFromCurrent = false)
+        {
+            // The FBBIK solver sleeps while not climbing (perf + clean animation-event bone reads) — wake it.
+            if (ik != null && !ik.enabled)
+            {
+                if (!ik.solver.initiated) ik.GetIKSolver().Initiate(ik.transform);   // belt & braces (Start order covers this)
+                ik.enabled = true;
+            }
+
+            Vector3 rightOut = rightRot * Vector3.forward;        // hold forward = outward grab normal
+
+            // Into-surface direction (flattened) for the shoulder-width offset of the second hand.
+            Vector3 intoFlat = Vector3.ProjectOnPlane(-rightOut, Vector3.up);
+            intoFlat = intoFlat.sqrMagnitude > 1e-4f ? intoFlat.normalized : -rightOut;
+            Vector3 right = Vector3.Cross(Vector3.up, intoFlat).normalized;
+
+            Vector3 leftTarget = rightPos - right * shoulderWidth;
+            if (!FindHoldNear(_currentSurface, leftTarget, rightPos, out Vector3 leftPos, out Quaternion leftRot))
+            {
+                leftPos = leftTarget;        // no distinct hold nearby — place beside the right hand
+                leftRot = rightRot;
+            }
+            _rhOutward = rightOut;
+            _lhOutward = leftRot * Vector3.forward;
+            _rhUp = rightRot * Vector3.up;
+            _lhUp = leftRot * Vector3.up;
+
+            if (reachFromCurrent)
+            {
+                // REACH: seed both hand effectors at the ACTUAL animated hand bones (SeedHandEffector
+                // compensates the write-time grip offsets, so the written pose EQUALS the bone pose) —
+                // the visible hands stay exactly where the animation left them while the IK weight
+                // fades in, then tween to the holds (staggered, hand-over-hand). The mismatch this
+                // leaves in the hang formula is bridged by the body pin captured by the caller.
+                _bracedBodyRot = transform.rotation;    // facingOut base while the braced turn tweens
+                _freeHangBodyRot = transform.rotation;
+                SeedHandEffector(true);
+                SeedHandEffector(false);
+                _rig.SetPoseTarget(ClimbEffector.RightHand, rightPos, rightRot, traverseMoveDuration);
+                _rig.SetPoseTarget(ClimbEffector.LeftHand, leftPos, leftRot, traverseMoveDuration,
+                                   traverseMoveDuration * 0.5f);
+            }
+            else
+            {
+                // SNAP (pure hold rotation; grip offset applied live at write time). Feet + body
+                // stay IK-free (free-hang).
+                _rig.SnapToPose(ClimbEffector.RightHand, rightPos, rightRot);
+                _rig.SnapToPose(ClimbEffector.LeftHand, leftPos, leftRot);
+            }
+            _rig.SetEffectorWeight(ClimbEffector.RightHand, 1f);
+            _rig.SetEffectorWeight(ClimbEffector.LeftHand, 1f);
+            _rig.SetEffectorWeight(ClimbEffector.LeftFoot, 0f);
+            _rig.SetEffectorWeight(ClimbEffector.RightFoot, 0f);
+            _rig.SetEffectorWeight(ClimbEffector.RootBody, 0f);
+            _rHandAttached = _lHandAttached = true;   // both hands are on (or reaching) holds
+            _lFootWeight = _rFootWeight = 0f;   // feet start dangling; UpdateFeet plants them
+            _footCooldown = 0f;
+            _lFootHoldIdx = _rFootHoldIdx = -1;
+            _standoffPush = 0f;
+            _headLookInit = false;
+            _legBlend = Vector2.zero;
+            _lFootLocked = _rFootLocked = false;
+            _footSmoothInit[0] = _footSmoothInit[1] = false;
+            _pendulumAccumulator = 0f;
+            ApplyGripOffset();
+
+            _freeHangFacing = intoFlat.sqrMagnitude > 1e-4f ? intoFlat.normalized : transform.forward;
+            if (!reachFromCurrent)
+                _freeHangBodyRot = Quaternion.LookRotation(_freeHangFacing, Vector3.up);
+
+            ConfigurePendulum();
+            _pendulum?.Reset(_rig.HandAverage);   // reach mode: rest below the seeded mid == current body pos
+
+            if (reachFromCurrent)
+            {
+                // No reposition AT ALL — the body PINS to the slide's stop position (UpdateBodyPose
+                // writes _attachPinPos instead of the hang formula) while the hands reach the holds
+                // and for as long as the player gives no input. The first hand step releases the pin
+                // (ReleaseAttachOffset): the pin-to-formula difference is captured there and decays
+                // across that step, where the body is moving anyway.
+                _attachPinPos = transform.position;
+                _attachOffsetHold = true;
+                _attachOffsetT = 1f;
+
+                // Ease the facing from the slide yaw onto the holds' braced facing.
+                StartBracedTurn();
+
+                // Seed the feet at their ACTUAL bone positions (weight 0 — the first plant then tweens
+                // from where the animation really left them, instead of teleporting under new hips).
+                Transform lfB = _animator != null && _animator.isHuman ? _animator.GetBoneTransform(HumanBodyBones.LeftFoot) : null;
+                Transform rfB = _animator != null && _animator.isHuman ? _animator.GetBoneTransform(HumanBodyBones.RightFoot) : null;
+                Vector3 hipR = HipPosition;
+                Vector3 brR = transform.right;
+                _rig.SnapToPose(ClimbEffector.LeftFoot,
+                    lfB != null ? lfB.position : hipR - Vector3.up * footDrop - brR * footSide, transform.rotation);
+                _rig.SnapToPose(ClimbEffector.RightFoot,
+                    rfB != null ? rfB.position : hipR - Vector3.up * footDrop + brR * footSide, transform.rotation);
+                return;
+            }
+
+            UpdateBodyPose(instant: true);
+
+            // Seed the feet under the hips (dangling, weight 0) so the first plant steps in from a sane
+            // spot instead of swooping from the world origin.
+            Vector3 hipG = HipPosition;
+            Vector3 brG = transform.right;
+            _rig.SnapToPose(ClimbEffector.LeftFoot, hipG - Vector3.up * footDrop - brG * footSide, transform.rotation);
+            _rig.SnapToPose(ClimbEffector.RightFoot, hipG - Vector3.up * footDrop + brG * footSide, transform.rotation);
+        }
+
+        /// <summary>
+        /// Snaps one hand's effector onto its LIVE animated bone, compensated for the write-time grip
+        /// offsets (current = bone ∘ inverse(offsets), so WriteEffector reproduces the bone pose
+        /// exactly) — the visible hand doesn't move when the effector's weight comes up, and any tween
+        /// started from here departs from the true animated hand. Fallback (no humanoid bone): the
+        /// shoulder point in front of the chest.
+        /// </summary>
+        private void SeedHandEffector(bool right)
+        {
+            ClimbEffector e = right ? ClimbEffector.RightHand : ClimbEffector.LeftHand;
+            Transform bone = _animator != null && _animator.isHuman
+                ? _animator.GetBoneTransform(right ? HumanBodyBones.RightHand : HumanBodyBones.LeftHand)
+                : null;
+            if (bone != null)
+            {
+                Quaternion grip = Quaternion.Euler(right ? rightHandGripRotation : leftHandGripRotation);
+                _rig.SnapToPose(e, bone.position - bone.rotation * handHoldOffset,
+                                bone.rotation * Quaternion.Inverse(grip));
+            }
+            else
+            {
+                Vector3 p = transform.position + transform.forward * rootForwardOffset + Vector3.up * rootDownOffset
+                            + transform.right * ((right ? 1f : -1f) * shoulderWidth * 0.5f);
+                _rig.SnapToPose(e, p, transform.rotation);
+            }
+        }
+
         private void BeginRelease()
         {
             if (_cameraOverridden) RestoreBracedReadyCamera();   // exiting from a peek → hand the camera back
             _stamina?.SetPendingStaminaCost(0f);                 // a Cancel-exit from the peek never pays the cost
             _releasing = true;
             _masterWeightTarget = 0f;
+            _enterLayerFloor = 0f;   // let the layer follow the fading IK weight down
             _regrabCooldownTimer = regrabCooldown;
             // Hand back to gravity from REST — the motor froze _verticalVelocity at grab time (often a fast
             // fall value), so without this the drop resumes mid-fall instead of ramping like a ledge step-off.
@@ -1014,6 +1225,18 @@ namespace Game.Climbing
         {
             _isClimbing = false;
             _releasing = false;
+            _sliding = false;                    // slide + enter-anim state never survives a release
+            _postSlideFreeHang = false;
+            _handsPending = false;               // drop any un-consumed deferred attach
+            _rHandAttached = _lHandAttached = true;
+            _attachOffsetHold = false;           // kill any live reach-attach bridge offset
+            _attachOffsetT = 1f;
+            _entering = false;
+            _enterFrozen = false;
+            _enterLayerFloor = 0f;
+            SetEnterSpeed(1f);
+            HidePrompt();                        // un-parents from the body if the slide had claimed it
+            StopSlideParticles();                // safety: a ragdoll/handoff mid-slide must not leave FX emitting
             if (_cameraOverridden) RestoreBracedReadyCamera();   // safety: never leave the rig frozen
             _mode = ClimbMode.Climbing;          // clear any BracedReady sub-state
             _readyT = 0f;
@@ -1066,6 +1289,9 @@ namespace Game.Climbing
             // Post-mantle get-up: cross-fade the climb pose out to the standing base idle (control still locked).
             if (_gettingUp) { TickGetup(dt); return; }
 
+            // Entry slide: the body rides the wall down with no IK and no traversal — its own tick.
+            if (_sliding) { TickSlide(dt); return; }
+
             // Fade FBBIK weight toward target (in on grab, out on release).
             float dur = _masterWeightTarget > _rig.MasterWeight ? ikFadeInDuration : ikFadeOutDuration;
             float step = dur > 0f ? dt / dur : 1f;
@@ -1084,8 +1310,12 @@ namespace Game.Climbing
 
             // Drive the climb pose layer in lockstep with the FinalIK weight so the pose appears/clears
             // as the IK fades (the layer WEIGHT reveals climbing — the isClimbing bool alone won't).
+            // _enterLayerFloor keeps the layer up after a slide attach (the slide already faded it to 1
+            // while the IK weight was still 0); BeginRelease zeroes the floor so fade-outs still work.
             if (_animator != null && _climbLayerIndex >= 0)
-                _animator.SetLayerWeight(_climbLayerIndex, _rig.MasterWeight);
+                _animator.SetLayerWeight(_climbLayerIndex, Mathf.Max(_rig.MasterWeight, _enterLayerFloor));
+
+            TickEnterAnim();   // blend ClimbEnter into the hang pose when the clip completes
 
             // Braced↔free-hang blend: fades the leg layer, foot IK and standoff toward 0 in free hang.
             _bracedWeight = Mathf.MoveTowards(_bracedWeight, _freeHang ? 0f : 1f, freeHangBlendSpeed * dt);
@@ -1105,7 +1335,10 @@ namespace Game.Climbing
                 else
                 {
                     HandleTraversal(dt);
-                    UpdateFeet(dt);          // plant/dangle each foot for this frame's Tick
+                    // Dormant post-slide hang: feet stay with the animation too (planting them while
+                    // the IK sleeps would pre-latch weights/holds and snap on wake).
+                    if (!_handsPending)
+                        UpdateFeet(dt);      // plant/dangle each foot for this frame's Tick
                     UpdatePoseSwitch();
                 }
             }

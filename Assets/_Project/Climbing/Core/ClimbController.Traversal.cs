@@ -23,6 +23,12 @@ namespace Game.Climbing
             Vector2 mv = _input.MoveInput;
             if (mv.sqrMagnitude < minMoveInput * minMoveInput) return;
 
+            // Post-slide dormant hang: the first move input wakes the rig and goes STRAIGHT into
+            // traversal — no pre-attach. Each hand leaves the animation only when IT steps (per-limb
+            // lazy attach in TryStepHand/TryStepHandArc), moving directly from its animated position
+            // to its own traversal hold.
+            if (_handsPending) WakeRigForTraversal();
+
             // Free hang = brachiation: turn to face the input first, then traverse (separate model).
             if (_freeHang) { HandleFreeHangTraversal(mv); return; }
 
@@ -133,11 +139,24 @@ namespace Game.Climbing
                 return false;
 
             ClimbEffector hand = moveRight ? ClimbEffector.RightHand : ClimbEffector.LeftHand;
+            AttachHandIfLoose(moveRight, hand);          // per-limb lazy attach: depart from the LIVE animated hand
             _rig.SetPoseTarget(hand, tp, tr, traverseMoveDuration);
             if (moveRight) { _rhOutward = tr * Vector3.forward; _rhUp = tr * Vector3.up; }
             else { _lhOutward = tr * Vector3.forward; _lhUp = tr * Vector3.up; }
             _moveCooldown = moveInterval;
+            ReleaseAttachOffset(traverseMoveDuration);   // first step after a slide attach un-pins the body
             return true;
+        }
+
+        /// <summary>Per-limb lazy attach (post-slide): a hand that hasn't touched a hold yet still
+        /// follows the animation (effector weight 0). The moment it steps, re-seed its effector on the
+        /// live bone and weight it in — the hand moves straight from its animated pose to its hold.</summary>
+        private void AttachHandIfLoose(bool right, ClimbEffector hand)
+        {
+            if (right ? _rHandAttached : _lHandAttached) return;
+            SeedHandEffector(right);
+            _rig.SetEffectorWeight(hand, 1f);
+            if (right) _rHandAttached = true; else _lHandAttached = true;
         }
 
         /// <summary>
@@ -203,10 +222,12 @@ namespace Game.Climbing
             if (!FindFreeHangHold(ideal, fromPos, pivot, out Vector3 tp, out Quaternion tr))
                 return false;
 
+            AttachHandIfLoose(moveRight, hand);          // per-limb lazy attach: depart from the LIVE animated hand
             _rig.SetPoseTarget(hand, tp, tr, traverseMoveDuration);
             if (moveRight) { _rhOutward = tr * Vector3.forward; _rhUp = tr * Vector3.up; }
             else { _lhOutward = tr * Vector3.forward; _lhUp = tr * Vector3.up; }
             _moveCooldown = moveInterval;
+            ReleaseAttachOffset(traverseMoveDuration);   // first step after a slide attach un-pins the body
             return true;
         }
 
