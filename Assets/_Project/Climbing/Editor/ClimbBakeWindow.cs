@@ -32,6 +32,7 @@ namespace Game.Climbing.Editor
         // EveryVertex (VertexHoldParser) params.
         private float _vtxMinOutwardDot = 0f;
         private float _vtxMaxUpDot = 0.85f;
+        private float _vtxWeldTolerance = 0.001f;   // own field — the ledge weld gets raised for other reasons
 
         // Shared.
         private bool _combineChildMeshes = false;
@@ -85,6 +86,10 @@ namespace Game.Climbing.Editor
                     new GUIContent("Max Up Dot", "Cull flat top-surface vertices so the climb ends at the top " +
                     "EDGE and the runtime mantles. 0.85 ≈ drop faces within ~30° of straight up; 1.01 keeps tops."),
                     _vtxMaxUpDot, 0f, 1.01f);
+                _vtxWeldTolerance = EditorGUILayout.FloatField(
+                    new GUIContent("Weld Tolerance", "EVERY-VERTEX duplicate merge: verts within this distance (m) " +
+                    "collapse to ONE hold. Keep at import-split scale (~0.001) — anywhere near the mesh's vertex " +
+                    "spacing this becomes spatial thinning and holds vanish \"at random\"."), _vtxWeldTolerance);
             }
 
             _combineChildMeshes = EditorGUILayout.Toggle(
@@ -105,9 +110,11 @@ namespace Game.Climbing.Editor
                     new GUIContent("  Occlusion Skin (m)", "Holds whose nearest crossing of another piece is within " +
                     "this distance count as AT THE SEAM (kept, not buried). Raise to keep more holds along " +
                     "inner-corner seams; lower if barely-buried holds survive."), _occlusionSkin);
-            _weldTolerance = EditorGUILayout.FloatField(
-                new GUIContent("Weld Tolerance", "Vertices within this distance (m) merge to one index so " +
-                "split vertices from import (and touching kit-bash seams) don't stack duplicate holds / break ledge detection. Raise only if a known ledge bakes nothing."), _weldTolerance);
+            if (_mode == BakeMode.LedgeEdges)
+                _weldTolerance = EditorGUILayout.FloatField(
+                    new GUIContent("Weld Tolerance", "LEDGE mode: vertices within this distance (m) merge to one " +
+                    "index so import-split vertices don't break edge adjacency. Raise only if a known ledge bakes " +
+                    "nothing. (Every Vertex mode has its own weld field above.)"), _weldTolerance);
             _selectedOnly = EditorGUILayout.Toggle(
                 new GUIContent("Selected Only", "Bake only selected ClimbableSurfaces (off = all in the open scene)."), _selectedOnly);
             _outputFolder = EditorGUILayout.TextField(
@@ -141,7 +148,7 @@ namespace Game.Climbing.Editor
             };
             var vertexSettings = new VertexHoldParser.Settings
             {
-                WeldTolerance = _weldTolerance,
+                WeldTolerance = _vtxWeldTolerance,
                 MinOutwardDot = _vtxMinOutwardDot,
                 MaxUpDot = _vtxMaxUpDot,
                 OutwardReference = Vector3.forward   // per-surface below
@@ -158,7 +165,11 @@ namespace Game.Climbing.Editor
                 {
                     // One shared weld across every piece → intersecting kit-bash seams merge.
                     vertexSettings.OutwardReference = surface.transform.forward;
-                    holds = VertexHoldParser.Parse(meshes, surface.transform, vertexSettings);
+                    holds = VertexHoldParser.Parse(meshes, surface.transform, vertexSettings, out VertexHoldParser.Stats stats);
+                    Debug.Log($"[ClimbBake] '{surface.name}' vertex parse: {stats.UniqueVerts} unique verts → " +
+                              $"{stats.Holds} holds (top-cull {stats.CulledTop}, inward-cull " +
+                              $"{(stats.HemisphereCullApplied ? stats.CulledInward.ToString() : "skipped")}, " +
+                              $"isolated {stats.Isolated}, weld tolerance {_vtxWeldTolerance}).", surface);
                 }
                 else
                 {
@@ -261,10 +272,12 @@ namespace Game.Climbing.Editor
         /// colliders — so the verdict matches the geometry the holds came from and needs no collider setup.
         ///
         /// Inside-ness per piece is decided by crossing PARITY, majority-voted across THREE spread rays: each
-        /// ray counts every surface crossing of each piece (backface queries on, so entries AND exits count);
-        /// an odd count means "inside". One ray alone grazes surfaces nearly edge-on at INNER CORNERS and
-        /// mis-counts — three diverse directions can't all graze the same face, so the vote (≥2 odd) is
-        /// robust there. A hold whose nearest crossing of a piece (over all rays) lies within
+        /// ray counts every surface crossing of each piece by PUNCH-THROUGH re-casting (Physics.RaycastAll
+        /// reports at most ONE hit per collider, so a single call cannot count crossings — step past each hit
+        /// and cast again; backface queries on, so entries AND exits register); an odd count means "inside".
+        /// One ray alone grazes surfaces nearly edge-on at INNER CORNERS and mis-counts — three diverse
+        /// directions can't all graze the same face, so the vote (≥2 odd) is robust there. Parity assumes
+        /// WATERTIGHT pieces (see the LooksClosed warning). A hold whose nearest crossing of a piece (over all rays) lies within
         /// <see cref="_occlusionSkin"/> sits ON that piece's surface / at the seam and is never culled by it
         /// — this both exempts the hold's own piece and keeps the holds lining an intersection seam.
         /// Editor-only.
@@ -281,6 +294,15 @@ namespace Game.Climbing.Editor
                 // Exact-geometry temp colliders, one per bake piece (hidden, never saved).
                 foreach (MeshFilter mf in pieces)
                 {
+                    // Parity (odd crossings = inside) is only sound on WATERTIGHT pieces: a ray passing
+                    // through an opening counts one crossing instead of two and buries EXPOSED holds of
+                    // other pieces at random. Surface it instead of letting the bake silently misjudge.
+                    if (!LooksClosed(mf))
+                        Debug.LogWarning($"[ClimbBake] '{surface.name}' piece '{mf.name}': bake mesh is NOT closed " +
+                                         "(open bottom / deleted faces?). The occlusion cull decides inside/outside " +
+                                         "by crossing parity, which miscounts through openings — close the bake mesh " +
+                                         "or disable Cull Occluded Holds for this cluster.", mf);
+
                     var go = new GameObject("~ClimbBakeOcclusion") { hideFlags = HideFlags.HideAndDontSave };
                     go.transform.SetPositionAndRotation(mf.transform.position, mf.transform.rotation);
                     go.transform.localScale = mf.transform.lossyScale;
@@ -297,7 +319,7 @@ namespace Game.Climbing.Editor
                 Transform st = surface.transform;
                 var kept = new List<ClimbHoldData>(holds.Count);
                 var verdict = new Dictionary<Collider, (int oddVotes, float minFirst)>();
-                var rayCross = new Dictionary<Collider, (int count, float first)>();
+                var rayCross = new Dictionary<Collider, (int count, float first, float last)>();
 
                 bool prevBackfaces = Physics.queriesHitBackfaces;
                 Physics.queriesHitBackfaces = true;   // parity needs EVERY crossing, exits (back faces) included
@@ -320,15 +342,33 @@ namespace Game.Climbing.Editor
                                         : r == 1 ? (n + t * 0.8f + Vector3.up * 0.5f).normalized
                                                  : (n - t * 0.7f - Vector3.up * 0.6f).normalized;
 
-                            RaycastHit[] hits = Physics.RaycastAll(p, dir, rayLen, ~0, QueryTriggerInteraction.Ignore);
+                            // PUNCH-THROUGH counting. RaycastAll returns at most ONE hit per collider, so
+                            // a single call can never see both the entry and the exit of a piece — parity
+                            // read from it degenerates into "did the ray touch the piece at all", and any
+                            // EXPOSED hold whose skewed rays passed through a neighbouring piece collected
+                            // two inside-votes and was culled (the random missing holds). Step just past
+                            // each hit and re-cast so every crossing of every piece registers.
                             rayCross.Clear();
-                            for (int k = 0; k < hits.Length; k++)
+                            float traveled = 0f;
+                            for (int guard = 0; guard < 128 && traveled < rayLen; guard++)
                             {
-                                Collider c = hits[k].collider;
-                                if (!tempCols.Contains(c)) continue;   // unrelated scene geometry
-                                rayCross[c] = rayCross.TryGetValue(c, out var e)
-                                    ? (e.count + 1, Mathf.Min(e.first, hits[k].distance))
-                                    : (1, hits[k].distance);
+                                if (!Physics.Raycast(p + dir * traveled, dir, out RaycastHit hit,
+                                                     rayLen - traveled, ~0, QueryTriggerInteraction.Ignore))
+                                    break;
+                                float dist = traveled + hit.distance;
+                                traveled = dist + 0.0005f;
+                                Collider c = hit.collider;
+                                if (!tempCols.Contains(c)) continue;   // unrelated scene geometry — punch through it too
+                                if (rayCross.TryGetValue(c, out var e))
+                                {
+                                    // A grazing ray can clip two coplanar triangles of one face — a single
+                                    // geometric crossing reported twice. Same-piece hits closer than 2 mm
+                                    // along the ray collapse into one crossing.
+                                    rayCross[c] = dist - e.last < 0.002f
+                                        ? (e.count, e.first, dist)
+                                        : (e.count + 1, e.first, dist);
+                                }
+                                else rayCross[c] = (1, dist, dist);
                             }
                             foreach (var kv in rayCross)
                             {
@@ -361,6 +401,31 @@ namespace Game.Climbing.Editor
         }
 
         private static Bounds Encapsulated(Bounds b, Bounds add) { b.Encapsulate(add); return b; }
+
+        /// <summary>Heuristic watertight test: on a closed mesh the area-weighted facet normals cancel;
+        /// an opening (deleted bottom / buried faces) leaves a residual about the size of the hole.
+        /// World-space so scaling weighs faces the same way the temp collider will.</summary>
+        private static bool LooksClosed(MeshFilter mf)
+        {
+            Mesh mesh = mf.sharedMesh;
+            Vector3[] verts = mesh.vertices;
+            int[] tris = mesh.triangles;
+            if (verts.Length == 0 || tris.Length < 3) return true;   // nothing to misjudge
+
+            Transform t = mf.transform;
+            var w = new Vector3[verts.Length];
+            for (int i = 0; i < w.Length; i++) w[i] = t.TransformPoint(verts[i]);
+
+            Vector3 sum = Vector3.zero;
+            float total = 0f;
+            for (int f = 0; f < tris.Length; f += 3)
+            {
+                Vector3 n = Vector3.Cross(w[tris[f + 1]] - w[tris[f]], w[tris[f + 2]] - w[tris[f]]);
+                sum += n;
+                total += n.magnitude;
+            }
+            return total <= 1e-6f || sum.magnitude <= 0.1f * total;
+        }
 
         private ClimbableSurface[] CollectSurfaces()
         {

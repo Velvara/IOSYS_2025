@@ -11,8 +11,8 @@ namespace Game.Climbing
     /// article's C1 (convex ledge → accept) / C2 (concave corner → reject). Long ledges are subdivided
     /// at <see cref="Settings.MinHoldDistance"/>; near-duplicate holds are merged on a hash grid.
     ///
-    /// Geometry-only — every hold gets RiskValue 0 / IconId 0 (resolves to the surface's fallback risk).
-    /// Vertex-paint risk/icon ids are SHELVED (see SHELVED_IDEAS.md), not pursued for now. Runtime-safe
+    /// Geometry-only — every hold gets RiskValue 0 / IconId 0 (slip risk is painted per scene
+    /// instance instead — ClimbableSurface.RiskClassOf / Tools/Climbing/Risk Painter). Runtime-safe
     /// (no UnityEditor types) so the same parser can run at bake time or, if ever needed, on spawn
     /// (the mesh must be Read/Write enabled in that case). The editor ClimbBakeWindow is the caller.
     /// </summary>
@@ -200,7 +200,7 @@ namespace Game.Climbing
                 {
                     LocalPosition = surfaceSpace.InverseTransformPoint(wh.pos),
                     LocalRotation = invSurf * worldRot,
-                    RiskValue = 0f,   // vertex-paint risk SHELVED (SHELVED_IDEAS.md); 0 → surface fallbackRisk
+                    RiskValue = 0f,   // unused — slip risk lives in the per-instance paint (ClimbRiskClass)
                     IconId = 0
                 });
             }

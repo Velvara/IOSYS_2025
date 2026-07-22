@@ -138,6 +138,10 @@ namespace Game.Climbing
                                    bodyRight, sideSign, minProgress, out Vector3 tp, out Quaternion tr))
                 return false;
 
+            // Grip roll against the hold this hand is about to RELEASE (risk paint, Free surfaces only).
+            // A failed roll aborts the step — the slip owns the frame (return true: the step "happened").
+            if (TrySlipOnStep(moveRight, fromPos)) return true;
+
             ClimbEffector hand = moveRight ? ClimbEffector.RightHand : ClimbEffector.LeftHand;
             AttachHandIfLoose(moveRight, hand);          // per-limb lazy attach: depart from the LIVE animated hand
             _rig.SetPoseTarget(hand, tp, tr, traverseMoveDuration);
@@ -222,6 +226,9 @@ namespace Game.Climbing
             if (!FindFreeHangHold(ideal, fromPos, pivot, out Vector3 tp, out Quaternion tr))
                 return false;
 
+            // Grip roll on the released hold (free hang has no wall below — a failed roll falls outright).
+            if (TrySlipOnStep(moveRight, fromPos)) return true;
+
             AttachHandIfLoose(moveRight, hand);          // per-limb lazy attach: depart from the LIVE animated hand
             _rig.SetPoseTarget(hand, tp, tr, traverseMoveDuration);
             if (moveRight) { _rhOutward = tr * Vector3.forward; _rhUp = tr * Vector3.up; }
@@ -262,6 +269,8 @@ namespace Game.Climbing
 
                 float pivSqr = (wp - pivotPos).sqrMagnitude;
                 if (pivSqr < clearSqr || pivSqr > maxSepSqr) continue;         // clear of + within reach of the pivot hand
+
+                if (_reachConstraint != null && !_reachConstraint(wp)) continue;   // external range cap (rope)
 
                 Quaternion wr = st.rotation * holds[i].LocalRotation;
                 if (Vector3.Dot(wr * Vector3.forward, climberOut) < facingCoherence) continue;   // same face
@@ -309,6 +318,8 @@ namespace Game.Climbing
                 if (otherSqr > maxSepSqr) continue;                                    // cap hand separation
                 if (Vector3.Dot(toOther, bodyRight) * sideSign < -crossMargin) continue; // keep hands ~uncrossed (small slack)
                 if (Vector3.Dot(fromDelta.normalized, traverseDir) < minProgress) continue; // progress in input dir
+
+                if (_reachConstraint != null && !_reachConstraint(wp)) continue;         // external range cap (rope)
 
                 Quaternion wr = st.rotation * holds[i].LocalRotation;
                 Vector3 outward = wr * Vector3.forward;

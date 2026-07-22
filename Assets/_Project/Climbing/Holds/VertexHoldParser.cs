@@ -24,7 +24,8 @@ namespace Game.Climbing
     /// the facet-normal accumulation averages normals across touching pieces), so runtime traversal —
     /// which climbs one _currentSurface — crosses the whole cluster without a multi-surface handoff.
     ///
-    /// Geometry-only: every hold gets RiskValue 0 / IconId 0 (resolves to the surface's fallback risk).
+    /// Geometry-only: every hold gets RiskValue 0 / IconId 0 (slip risk is painted per scene
+    /// instance instead — ClimbableSurface.RiskClassOf / Tools/Climbing/Risk Painter).
     /// Runtime-safe (no UnityEditor types). ClimbBakeWindow is the caller today.
     /// </summary>
     public static class VertexHoldParser
@@ -64,9 +65,24 @@ namespace Game.Climbing
             };
         }
 
+        /// <summary>Per-stage counts of a parse — makes "fewer holds than expected" attributable to the
+        /// stage that dropped them (the bake window logs these).</summary>
+        public struct Stats
+        {
+            public int UniqueVerts;              // after the weld
+            public int Isolated;                 // no non-degenerate facet after the weld
+            public int CulledInward;             // hemisphere cull (0 when not applied)
+            public int CulledTop;                // MaxUpDot cull
+            public bool HemisphereCullApplied;   // false = closed/no-dominant-facing geometry, cull skipped
+            public int Holds;
+        }
+
         /// <summary>Single-mesh parse — the common case (see the list overload for kit-bash clusters).</summary>
         public static List<ClimbHoldData> Parse(MeshFilter bakeMesh, Transform surfaceSpace, Settings settings)
-            => Parse(bakeMesh != null ? new[] { bakeMesh } : System.Array.Empty<MeshFilter>(), surfaceSpace, settings);
+            => Parse(bakeMesh != null ? new[] { bakeMesh } : System.Array.Empty<MeshFilter>(), surfaceSpace, settings, out _);
+
+        public static List<ClimbHoldData> Parse(IReadOnlyList<MeshFilter> meshes, Transform surfaceSpace, Settings settings)
+            => Parse(meshes, surfaceSpace, settings, out _);
 
         /// <summary>
         /// Parses one or more meshes into per-vertex holds expressed in <paramref name="surfaceSpace"/>'s
@@ -75,8 +91,9 @@ namespace Game.Climbing
         /// Returns an empty list on bad input; the caller should check each mesh's <c>isReadable</c> first
         /// and warn the dev otherwise (unreadable meshes are silently skipped here).
         /// </summary>
-        public static List<ClimbHoldData> Parse(IReadOnlyList<MeshFilter> meshes, Transform surfaceSpace, Settings settings)
+        public static List<ClimbHoldData> Parse(IReadOnlyList<MeshFilter> meshes, Transform surfaceSpace, Settings settings, out Stats stats)
         {
+            stats = default;
             var result = new List<ClimbHoldData>();
             if (meshes == null || meshes.Count == 0 || surfaceSpace == null) return result;
 
@@ -113,6 +130,7 @@ namespace Game.Climbing
             }
 
             int vertCount = cpos.Count;
+            stats.UniqueVerts = vertCount;
             if (vertCount == 0 || tris.Count < 3) return result;
 
             // Per-vertex outward normal = area-weighted sum of adjacent FACET normals (raw cross, so bigger
@@ -134,27 +152,41 @@ namespace Game.Climbing
                 vNormal[i0] += n; vNormal[i1] += n; vNormal[i2] += n;         // area-weighted accumulation
             }
 
-            Vector3 reference = areaNormalSum.sqrMagnitude > 1e-6f
-                ? areaNormalSum.normalized
-                : (settings.OutwardReference.sqrMagnitude > 1e-6f ? settings.OutwardReference.normalized : Vector3.forward);
-
             // The hemisphere cull only means something when the geometry has a dominant facing (a wall-like
             // sheet). On CLOSED geometry (a free-standing rock, a merged kit-bash cluster) the area normals
             // cancel (Σ ≈ 0 relative to total area), there is no meaningful "inward", and culling against the
             // near-random residual — or the surface-forward fallback — just slices the hold set in half along
             // an arbitrary axis. Skip the cull then; burial inside neighbouring pieces is the bake's occlusion
             // cull's job, not a direction cull's.
-            bool hasDominantFacing = areaNormalSum.magnitude > 0.15f * totalArea;
+            //
+            // HORIZONTAL component only: an OPEN bake mesh (deleted bottom / buried faces — common on
+            // kit-bash proxies) leaves a big VERTICAL residual the size of its hole. That residual is
+            // meaningless as a wall facing (MaxUpDot owns tops) — and worse, with the reference pointing
+            // up every side-face vertex sat EXACTLY on the hemisphere boundary, where float noise culled
+            // a pseudo-random half of them (the "random missing holds on a flat face" bake bug). Only a
+            // sideways-facing sheet counts as having a dominant facing.
+            Vector3 dominantFlat = Vector3.ProjectOnPlane(areaNormalSum, Vector3.up);
+            bool hasDominantFacing = dominantFlat.magnitude > 0.15f * totalArea;
+
+            Vector3 reference = hasDominantFacing ? dominantFlat.normalized
+                : areaNormalSum.sqrMagnitude > 1e-6f ? areaNormalSum.normalized
+                : settings.OutwardReference.sqrMagnitude > 1e-6f ? settings.OutwardReference.normalized
+                : Vector3.forward;
 
             Quaternion invSurf = Quaternion.Inverse(surfaceSpace.rotation);
 
+            stats.HemisphereCullApplied = hasDominantFacing;
             for (int v = 0; v < vertCount; v++)
             {
-                if (vNormal[v].sqrMagnitude <= 1e-10f) continue;             // isolated vertex, no facing
+                if (vNormal[v].sqrMagnitude <= 1e-10f) { stats.Isolated++; continue; }   // isolated vertex, no facing
+
                 Vector3 n = vNormal[v].normalized;
 
-                if (hasDominantFacing && Vector3.Dot(n, reference) < settings.MinOutwardDot) continue;   // inward/back-facing (sheets only)
-                if (Vector3.Dot(n, Vector3.up) > settings.MaxUpDot) continue;       // flat top surface
+                // Margin below the threshold so verts RIDING the boundary (a face exactly perpendicular
+                // to the reference) resolve deterministically to KEEP instead of by float noise.
+                if (hasDominantFacing && Vector3.Dot(n, reference) < settings.MinOutwardDot - 1e-3f)
+                { stats.CulledInward++; continue; }                                      // inward/back-facing (sheets only)
+                if (Vector3.Dot(n, Vector3.up) > settings.MaxUpDot) { stats.CulledTop++; continue; }   // flat top surface
 
                 // Grab basis: horizontalise the normal into an outward grab dir with world-up as the hold up
                 // (matches the wall convention in HandholdParser / the trunk). Near-vertical normals (steep
@@ -178,11 +210,12 @@ namespace Game.Climbing
                 {
                     LocalPosition = surfaceSpace.InverseTransformPoint(cpos[v]),
                     LocalRotation = invSurf * worldRot,
-                    RiskValue = 0f,   // geometry-only; 0 → surface fallbackRisk
+                    RiskValue = 0f,   // unused — slip risk lives in the per-instance paint (ClimbRiskClass)
                     IconId = 0
                 });
             }
 
+            stats.Holds = result.Count;
             return result;
         }
     }

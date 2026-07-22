@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using Game.Climbing;
 using Game.PlayerV2;
 
 public class CycleItems : MonoBehaviour
@@ -29,10 +30,12 @@ public class CycleItems : MonoBehaviour
 
     private bool cyclingLocked = false;
     private IControlLock controlLock;
+    private ClimbController climb;   // climbing is the one external-control state that allows cycling
 
     void Start()
     {
         controlLock = GetComponentInParent<IControlLock>();
+        climb = GetComponentInParent<ClimbController>();
         EnsureCounts();
 
         if (prefabs.Count > 0)
@@ -72,12 +75,16 @@ public class CycleItems : MonoBehaviour
     }
 
     /// <summary>
-    /// Cycling is allowed when not explicitly locked AND no external system (climbing, cutscene,
-    /// hookshot drag) holds control of the character.
+    /// Cycling is allowed when not explicitly locked AND no external system (cutscene, hookshot
+    /// drag, rappel) holds control of the character — EXCEPT while CLIMBING, where cycling stays
+    /// available (selecting the carbine mid-climb). Aiming/using tools on the wall stays blocked
+    /// by AimManager's own external-control guard; only the selection moves.
     /// </summary>
     private bool CanCycle()
     {
-        return !cyclingLocked && (controlLock == null || !controlLock.IsExternalControlActive);
+        if (cyclingLocked) return false;
+        if (controlLock == null || !controlLock.IsExternalControlActive) return true;
+        return climb != null && climb.IsClimbing;
     }
 
     /// <summary>True while the virtual "None" slot (empty hands, nothing equipped) is selected.

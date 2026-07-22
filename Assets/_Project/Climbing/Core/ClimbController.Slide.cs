@@ -11,8 +11,11 @@ namespace Game.Climbing
     /// 0). BRAKE (enableSlideBrake): while Use is HELD the frame's advance is scaled by
     /// brakeSpeedFactor and the brake pose shows; releasing returns to full curve speed and the slide
     /// pose — distance skipped while braking is never covered. The wall is followed by probe and the surface's
-    /// holds are checked every frame — losing either (past an overhang lip / off the surface's edge)
-    /// drops the climber into a fall carrying the slide's current speed. Where the slide stops,
+    /// holds are checked every frame — running out of HOLDS drops into a fall carrying the slide's
+    /// speed, but losing just the WALL (an overhang lip) with holds still in reach stops and attaches
+    /// AT THE LIP: entry slides always end hanging on, and no QTE ever runs here — only the risk SLIP
+    /// (ClimbController.Slip.cs, started by a hand-step grip roll, never by a grab) can drop the
+    /// climber via its Use-QTE. Where the slide stops,
     /// NOTHING moves: the body pins in place, every limb stays animation-driven (IK asleep) and the
     /// found hold is only remembered (_handsPending). The first MOVE input wakes the rig for direct
     /// traversal (WakeRigForTraversal) — each hand then attaches PER-LIMB on its own first step,
@@ -127,9 +130,20 @@ namespace Game.Climbing
                 _slideWallNormal = hit.normal;
                 pos = hit.point + hit.normal * rootForwardOffset - Vector3.up * detectHeightOffset;
             }
+            else if (AnyHoldWithin(transform.position + Vector3.up * detectHeightOffset, slideHoldRadius))
+            {
+                // ENTRY slides (jump reattach / falling grab) always end HANGING ON unless the holds
+                // themselves run out — losing the wall at an overhang lip while holds are still in
+                // reach stops the slide AT THE LIP and attaches there (the feet probe will pick free
+                // hang if there's no wall below). Only the risk SLIP (ClimbController.Slip.cs) may
+                // drop the climber off a lost wall.
+                if (logClimbEvents) Debug.Log("[ClimbController] Entry slide: wall ended — attaching at the lip.");
+                AttachAfterSlide();
+                return;
+            }
             else
             {
-                EndSlideToFall("wall lost");   // slid past the surface's lower edge / an overhang lip
+                EndSlideToFall("wall lost with no holds left");   // slid past the surface entirely
                 return;
             }
 
@@ -460,6 +474,7 @@ namespace Game.Climbing
         private void OnDestroy()
         {
             if (_prompt != null) Destroy(_prompt.gameObject);
+            if (_slipPrompt != null) Destroy(_slipPrompt.gameObject);
         }
 
         // ------------------------------------------------------------------ enter animation

@@ -128,6 +128,26 @@ namespace Game.Climbing
         [Tooltip("Optional particle systems (e.g. on the hands, world-space distance emission) played while sliding: Play on slide start, Stop (emission only) at slide end — live particles fade out naturally. PERF TIP: set each system's main-module Stop Action to Disable so the GameObject deactivates itself once the last particle dies; this code re-activates it on the next slide.")]
         [SerializeField] private ParticleSystem[] slideParticles;
 
+        [Header("Slip (risk-paint grip roll on hand steps — FREE surfaces)")]
+        [Tooltip("Master toggle. Each hand step on a Free-type surface rolls against the RELEASED hold's painted risk class (ClimbableSurface green/blue/red percentages); a failed roll slides the climber down the wall with a Use-press recovery window. Trunks and Ledge surfaces never slip.")]
+        [SerializeField] private bool enableSlip = true;
+        [Tooltip("Constant downward speed (m/s) of a slip slide (also the fall speed carried into a failed recovery).")]
+        [SerializeField] private float slipSpeed = 3.5f;
+        [Tooltip("Max distance (m) a slip can slide; reaching it without a successful recovery press = fall.")]
+        [SerializeField] private float slipMaxDistance = 3f;
+        [Tooltip("Seconds the recovery prompt stays pressable once it appears. Use INSIDE the window = slide ends, control returns; Use BEFORE the prompt or missing the window = immediate fall.")]
+        [SerializeField] private float slipPromptWindow = 0.25f;
+        [Tooltip("Where in the slide the prompt appears, randomized between x and y as a fraction of the LATEST possible time (the window always fits before the slide's max distance).")]
+        [SerializeField] private Vector2 slipPromptRange = new Vector2(0.2f, 0.8f);
+        [Tooltip("Seconds after a slip FALL during which the climber can't re-grab (the exposed 'time of reattach').")]
+        [SerializeField] private float slipReattachCooldown = 1.5f;
+        [Tooltip("Prompt prefab showing the Use button icon (billboarded by code). Leave null for the placeholder white square.")]
+        [SerializeField] private GameObject slipPromptPrefab;
+        [Tooltip("World size (m) of the slip prompt.")]
+        [SerializeField] private float slipPromptSize = 0.25f;
+        [Tooltip("Local offset from the character root where the prompt appears (default: above the head).")]
+        [SerializeField] private Vector3 slipPromptOffset = new Vector3(0f, 2f, 0f);
+
         [Header("Attach Prompt (world-space grab marker)")]
         [Tooltip("Show a world-space marker at the hold the character would attach to if Use were pressed (normal locomotion + airborne), updated every frame while a candidate exists.")]
         [SerializeField] private bool showAttachPrompt = true;
@@ -491,6 +511,35 @@ namespace Game.Climbing
         /// <summary>The surface currently being climbed (null when not climbing). Read <c>.Source</c> to tell a Flora trunk (Procedural) from a parsed cliff (Authored).</summary>
         public ClimbableSurface CurrentSurface => _isClimbing ? _currentSurface : null;
 
+        // External hand-reach constraint (e.g. the carbine tether's rope range): when set, traversal
+        // hold searches skip candidates the predicate rejects — the climber simply can't reach past
+        // it, no clamping/fighting the body pose. Null = unconstrained. Registered by tool systems
+        // (systems adapt to the controller); cleared by the owner when its restriction ends.
+        private System.Func<Vector3, bool> _reachConstraint;
+
+        /// <summary>Install (or clear, with null) a world-space predicate limiting which holds the
+        /// hands may step to. Used by the carbine tether to cap movement at the rope's range.</summary>
+        public void SetReachConstraint(System.Func<Vector3, bool> allowHandTarget)
+            => _reachConstraint = allowHandTarget;
+
+        /// <summary>The RIGHT hand's current hold — the carbine placement point (CarbineController).
+        /// False while the hand isn't SETTLED on a hold: not climbing, sliding/slipping, the
+        /// post-slide dormant hang (deferred/per-limb attach), mantling, or a climb jump.</summary>
+        public bool TryGetRightHandHold(out Vector3 pos, out Quaternion rot)
+        {
+            pos = default;
+            rot = Quaternion.identity;
+            if (!_isClimbing || _releasing || _sliding || _slipping || _handsPending ||
+                _mantling || _gettingUp || _climbJumping || !_rHandAttached)
+                return false;
+
+            pos = _rig.GetCurrentPosition(ClimbEffector.RightHand);
+            rot = _rhOutward.sqrMagnitude > 1e-4f
+                ? Quaternion.LookRotation(_rhOutward, _rhUp.sqrMagnitude > 1e-4f ? _rhUp : Vector3.up)
+                : transform.rotation;
+            return true;
+        }
+
         // -- Current grab candidate (while not climbing) --
         private bool _hasCandidate;
         private Vector3 _candidatePos;
@@ -529,6 +578,16 @@ namespace Game.Climbing
         private float _attachOffsetDur = 0.0001f;
         private Vector3 _slideWallNormal = Vector3.forward;  // outward wall normal, re-probed while sliding
         private bool _postSlideFreeHang;       // slide ended hands-only (no wall at the feet) → hold free hang until the feet find wall
+
+        // -- Slip (failed grip roll on a hand step: the body slides down the wall; Use inside the
+        //    prompt window recovers into the slide-stop pin, anything else falls) --
+        private bool _slipping;
+        private float _slipElapsed;
+        private float _slipDistSoFar;
+        private float _slipPromptTime;         // seconds into the slip when the prompt appears
+        private bool _slipPromptShown;
+        private bool _slipResolved;            // the QTE consumed a press (recover started / early-press fall)
+        private Transform _slipPrompt;         // Use-icon prompt (separate from the attach prompt)
 
         // -- Enter animation (ClimbEnter clip on every grab; freezes at the OnClimbEnterHold event while sliding) --
         private bool _entering;                // ClimbEnter currently owns the layer (until the clip completes)
@@ -765,6 +824,7 @@ namespace Game.Climbing
         /// (Use-near-a-rope hands the body off into rappel) — nothing to do here.</summary>
         private void OnUseInput(InputAction.CallbackContext ctx)
         {
+            if (_slipping) { OnSlipUsePressed(); return; }   // the slip QTE owns Use (a performed callback is always a FRESH press)
             if (_isClimbing) { if (logClimbEvents) Debug.Log("[ClimbDiag] Use ignored — already climbing."); return; }                        // BracedReady is on Jump now; rope handoff is RopeController's
             if (_input != null && _input.AimHeld) { if (logClimbEvents) Debug.Log("[ClimbDiag] Use ignored — AimHeld (tool fires)."); return; }   // Use fires a tool while aiming — don't also grab
             if (_ragdoll != null && _ragdoll.IsRagdolled) { if (logClimbEvents) Debug.Log("[ClimbDiag] Use ignored — ragdolled."); return; }   // that press is the ragdoll recovery, not a grab
@@ -776,7 +836,7 @@ namespace Game.Climbing
         /// jump-off (wind-up → ClimbJump clip → leave-wall event → launch).</summary>
         private void OnJumpInput(InputAction.CallbackContext ctx)
         {
-            if (!_isClimbing || _releasing || _mantling || _gettingUp || _sliding) return;
+            if (!_isClimbing || _releasing || _mantling || _gettingUp || _sliding || _slipping) return;
 
             // Post-slide dormant hang: one Jump press attaches both hands AND enters the peek — the
             // hands finish their reach while the BracedReady turn eases in (the peek only needs the
@@ -802,7 +862,7 @@ namespace Game.Climbing
         /// climbReleaseHoldTime releases the climb entirely from any climbing state.</summary>
         private void TickCancelInput(float dt)
         {
-            if (_cancelAction == null || !_isClimbing || _sliding ||
+            if (_cancelAction == null || !_isClimbing || _sliding || _slipping ||
                 _releasing || _mantling || _gettingUp || _climbJumping || _jumpAirborne)
             {
                 _cancelHoldTimer = 0f;
@@ -1226,6 +1286,8 @@ namespace Game.Climbing
             _isClimbing = false;
             _releasing = false;
             _sliding = false;                    // slide + enter-anim state never survives a release
+            _slipping = false;                   // nor a slip's
+            HideSlipPrompt();
             _postSlideFreeHang = false;
             _handsPending = false;               // drop any un-consumed deferred attach
             _rHandAttached = _lHandAttached = true;
@@ -1291,6 +1353,9 @@ namespace Game.Climbing
 
             // Entry slide: the body rides the wall down with no IK and no traversal — its own tick.
             if (_sliding) { TickSlide(dt); return; }
+
+            // Slip (failed grip roll): the body slides down the wall while the Use-QTE runs — own tick.
+            if (_slipping) { TickSlip(dt); return; }
 
             // Fade FBBIK weight toward target (in on grab, out on release).
             float dur = _masterWeightTarget > _rig.MasterWeight ? ikFadeInDuration : ikFadeOutDuration;
