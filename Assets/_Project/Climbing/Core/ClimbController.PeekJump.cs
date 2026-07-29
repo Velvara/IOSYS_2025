@@ -436,6 +436,7 @@ namespace Game.Climbing
                 // ends this hold too) — this branch is the fallback that drops the pose/camera hold
                 // when the ragdoll system is absent, disabled, or tuned to a greater height.
                 EndJumpAirborne();
+                if (landed) ClimbJumpLanded?.Invoke();   // feet-down after a jump — tethered tools drop off here
             }
         }
 

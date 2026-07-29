@@ -511,15 +511,46 @@ namespace Game.Climbing
         /// <summary>The surface currently being climbed (null when not climbing). Read <c>.Source</c> to tell a Flora trunk (Procedural) from a parsed cliff (Authored).</summary>
         public ClimbableSurface CurrentSurface => _isClimbing ? _currentSurface : null;
 
+        /// <summary>Max distance a hand may step to a new hold — the natural "adjacency" radius for
+        /// hold-graph tools (e.g. the carbine tether's geodesic reach): two holds within this are one
+        /// hand-step apart.</summary>
+        public float MaxStepReach => maxStepReach;
+
+        /// <summary>Minimum outward-normal dot for a hold to count as "the same face" during traversal.
+        /// Reused by hold-graph tools to keep a geodesic path on one face (no wrapping around corners).</summary>
+        public float FacingCoherence => facingCoherence;
+
+        /// <summary>Raised when the climb genuinely ENDS and control returns to locomotion: a wall release
+        /// (Cancel-hold / reach-bottom step-off), a slide or slip fall, a ragdoll takeover, or a completed
+        /// mantle top-out — every path routes through FinishRelease. NOT raised on a climb jump-off (that
+        /// keeps the body in the jump flow, never touching FinishRelease), so a tethered tool that must
+        /// persist through a jump can treat this as "the climber left the wall for good".</summary>
+        public event System.Action ClimbReleased;
+
+        /// <summary>Raised on a "free" Cancel TAP while climbing — a tap the controller did NOT spend
+        /// cancelling a BracedReady peek (that always takes the tap first) and that wasn't a hold-to-
+        /// release. Lets a tethered tool (the carbine) detach on a Cancel tap without the controller
+        /// knowing about it. Only fires while actively climbing (not during a scripted mantle/jump/slide).</summary>
+        public event System.Action CancelTapped;
+
+        /// <summary>Raised when a climb JUMP-OFF ends with the character back on their feet (a grounded
+        /// landing while descending — not a mid-air reattach, and not a fall past the ragdoll height,
+        /// which routes through the ragdoll → ClimbReleased instead). Lets a tethered tool drop the rope
+        /// on a clean landing.</summary>
+        public event System.Action ClimbJumpLanded;
+
         // External hand-reach constraint (e.g. the carbine tether's rope range): when set, traversal
         // hold searches skip candidates the predicate rejects — the climber simply can't reach past
         // it, no clamping/fighting the body pose. Null = unconstrained. Registered by tool systems
-        // (systems adapt to the controller); cleared by the owner when its restriction ends.
-        private System.Func<Vector3, bool> _reachConstraint;
+        // (systems adapt to the controller); cleared by the owner when its restriction ends. The
+        // predicate takes (surface, holdIndex) so the owner can key a precomputed per-hold set (the
+        // carbine caches a geodesic reachable set at placement) — an O(1) lookup per candidate.
+        private System.Func<ClimbableSurface, int, bool> _reachConstraint;
 
-        /// <summary>Install (or clear, with null) a world-space predicate limiting which holds the
-        /// hands may step to. Used by the carbine tether to cap movement at the rope's range.</summary>
-        public void SetReachConstraint(System.Func<Vector3, bool> allowHandTarget)
+        /// <summary>Install (or clear, with null) a predicate limiting which holds the hands may step
+        /// to, keyed by (surface, hold index). Used by the carbine tether to cap movement at the rope's
+        /// along-surface range (see HoldGeodesic).</summary>
+        public void SetReachConstraint(System.Func<ClimbableSurface, int, bool> allowHandTarget)
             => _reachConstraint = allowHandTarget;
 
         /// <summary>The RIGHT hand's current hold — the carbine placement point (CarbineController).
@@ -884,10 +915,16 @@ namespace Game.Climbing
             }
             else
             {
-                // Released before the hold threshold = a TAP → cancel BracedReady (return to climbing).
-                if (_cancelWasPressed && _cancelHoldTimer < climbReleaseHoldTime &&
-                    _mode == ClimbMode.BracedReady && !_readyReturning)
-                    _readyReturning = true;
+                // Released before the hold threshold = a TAP. In BracedReady the tap cancels the peek
+                // (first priority); otherwise it's a "free" tap handed to tools — the carbine tether
+                // detaches on it (so from a peek it takes a second tap: cancel peek, then detach).
+                if (_cancelWasPressed && _cancelHoldTimer < climbReleaseHoldTime)
+                {
+                    if (_mode == ClimbMode.BracedReady && !_readyReturning)
+                        _readyReturning = true;
+                    else
+                        CancelTapped?.Invoke();
+                }
                 _cancelHoldTimer = 0f;
             }
             _cancelWasPressed = pressed;
@@ -1321,6 +1358,7 @@ namespace Game.Climbing
             _controlLock?.ReleaseExternalControl();   // FSM hands control back to Jump/Move/Idle
             if (ik != null) ik.enabled = false;       // solver back to sleep until the next grab
             if (logClimbEvents) Debug.Log("[ClimbController] Released — control returned.");
+            ClimbReleased?.Invoke();                  // tethered tools (carbine) drop off the wall here
         }
 
         /// <summary>The player is about to ragdoll (hard fall or an external trigger): tear down whatever

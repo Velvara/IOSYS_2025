@@ -270,7 +270,7 @@ namespace Game.Climbing
                 float pivSqr = (wp - pivotPos).sqrMagnitude;
                 if (pivSqr < clearSqr || pivSqr > maxSepSqr) continue;         // clear of + within reach of the pivot hand
 
-                if (_reachConstraint != null && !_reachConstraint(wp)) continue;   // external range cap (rope)
+                if (_reachConstraint != null && !_reachConstraint(s, i)) continue;   // external range cap (rope)
 
                 Quaternion wr = st.rotation * holds[i].LocalRotation;
                 if (Vector3.Dot(wr * Vector3.forward, climberOut) < facingCoherence) continue;   // same face
@@ -319,7 +319,7 @@ namespace Game.Climbing
                 if (Vector3.Dot(toOther, bodyRight) * sideSign < -crossMargin) continue; // keep hands ~uncrossed (small slack)
                 if (Vector3.Dot(fromDelta.normalized, traverseDir) < minProgress) continue; // progress in input dir
 
-                if (_reachConstraint != null && !_reachConstraint(wp)) continue;         // external range cap (rope)
+                if (_reachConstraint != null && !_reachConstraint(s, i)) continue;         // external range cap (rope)
 
                 Quaternion wr = st.rotation * holds[i].LocalRotation;
                 Vector3 outward = wr * Vector3.forward;

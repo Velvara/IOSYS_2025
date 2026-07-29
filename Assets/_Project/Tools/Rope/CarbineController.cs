@@ -6,18 +6,21 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 /// <summary>
-/// Player-side carbine (carabiner) system — Stage 3 of the risk/rope batch: placement + tether +
-/// detach. While CLIMBING with the carbine item selected (CycleItems prefab carrying CarbineItem),
-/// a SHORT Use press (place-on-release) spawns the carbine at the RIGHT hand's hold (consuming one
-/// from the inventory) and creates the tether rope carbine → hip slot. While climbing TETHERED,
-/// HOLDING Use past holdDetachTime detaches instead: the rope lets go of the hip, dangles from the
-/// carbine, every material exposing the dissolve property fades 0→1, and carbine + rope are
-/// destroyed. The tether sim is selectable: VerletTetherRope (default — cheap, wraps around
-/// geometry) or PhysicsTetherRope (PhysX joint chain, the A/B comparison).
+/// Player-side carbine (carabiner) system — placement + tether + detach + rope-range gate. While
+/// CLIMBING with the carbine item selected (CycleItems prefab carrying CarbineItem), a Use press
+/// spawns the carbine at the RIGHT hand's hold (consuming one from the inventory) and creates the
+/// tether rope carbine → hip slot; pressing Use again while tethered REPLACES it (detach the old,
+/// place a fresh one at the new hold, recompute the reachable set — the carbine climbs up with you).
+/// If the inventory is empty the press is ignored (the current tether is kept). DETACHING is a Cancel
+/// TAP (the rope lets go of the hip, dangles from the carbine, every material exposing the dissolve
+/// property fades 0→1, then carbine + rope are destroyed); the climb also auto-detaches when it ends
+/// (release / mantle top-out / fall — via ClimbController.ClimbReleased), but a tethered jump-off
+/// keeps the rope. While tethered, hand steps are gated to the rope's along-surface reach (a geodesic
+/// hold set cached at placement — HoldGeodesic). The tether sim is selectable: VerletTetherRope
+/// (default — cheap, wraps around geometry) or PhysicsTetherRope (PhysX joint chain, the A/B compare).
 ///
-/// This stage is placement/visual only — rope-length clamping mid-jump, the yank stop, dangling,
-/// carbine break checks and multi-carbine routing are the NEXT stage (they read IsTethered /
-/// TautAmount / AnchorPoint from here).
+/// The airborne yank stop, dangle→reattach/rappel, carbine break checks and multi-carbine routing are
+/// the NEXT stage (they read IsTethered / TautAmount / AnchorPoint / RemainingLength from here).
 /// </summary>
 public class CarbineController : MonoBehaviour
 {
@@ -31,11 +34,6 @@ public class CarbineController : MonoBehaviour
     [Header("Placement")]
     [Tooltip("Lift off the hold along its outward normal so the carbine mesh sits ON the rock, not in it.")]
     public float carbineSurfaceOffset = 0.03f;
-
-    [Header("Input")]
-    [Tooltip("Seconds Use must be HELD (while climbing tethered) to detach the rope. A press RELEASED " +
-             "before this places a carbine instead (place-on-release, so a detach never also places).")]
-    public float holdDetachTime = 0.5f;
 
     [Header("Tether Rope")]
     [Tooltip("Which simulation drives the tether. Verlet+collision is the default (cheap, stable, wraps " +
@@ -62,13 +60,22 @@ public class CarbineController : MonoBehaviour
     [Tooltip("How far off the surface a wrap pivot sits (the measuring chain's corner points).")]
     public float pivotSkin = 0.06f;
 
+    [Header("Yank (airborne rope catch)")]
+    [Tooltip("Extra stretch (m) the rope allows PAST its length before the catch is fully hard — the " +
+             "elastic 'give' so a jump that runs the rope out snaps taut instead of hitting a wall.")]
+    public float yankGiveDistance = 0.3f;
+    [Tooltip("How fast (m/s) the stretched rope pulls the body back toward its true length after a yank — " +
+             "the elastic snap-back / settle rate. Higher = snappier catch.")]
+    public float yankReturnSpeed = 4f;
+    [Tooltip("How fast the motor's accumulated fall speed bleeds off while the rope bears the body's weight " +
+             "(so a later release doesn't inherit a runaway gravity build-up). Gentle keeps the first swing.")]
+    public float yankVelocityDamp = 6f;
+
     [Header("Debug")]
-    [Tooltip("While tethered: draw the live range boundary (wire sphere from the last wrap pivot), " +
-             "the pivot chain, and the current surface's holds near the boundary coloured by " +
-             "reachability (green = still steppable, red = past the rope). Gizmos must be enabled.")]
+    [Tooltip("While tethered: draw the pivot chain (yellow — the physical rope path used for pay-out + " +
+             "the off-wall clamp) and the cached geodesic reachable-hold set in green (the holds a hand " +
+             "may still step to on the rope). Gizmos must be enabled.")]
     public bool showRangeDebug = false;
-    [Tooltip("Only holds within this distance of the range boundary draw (dense bakes hold ~21k).")]
-    public float rangeDebugBand = 1.5f;
 
     [Header("Detach Dissolve")]
     [Tooltip("Material property driven 0→1 on detach, on every renderer of the carbine AND the rope " +
@@ -100,10 +107,6 @@ public class CarbineController : MonoBehaviour
     private Transform _ropePoint;
     private TetherRopeBase _tether;
 
-    private bool _usePressed;
-    private float _useDownTime;
-    private bool _detachConsumed;      // the hold already detached — the coming release must not place
-
     private void Start()
     {
         _climb = GetComponentInParent<ClimbController>();
@@ -116,37 +119,64 @@ public class CarbineController : MonoBehaviour
         _useAction = actions != null ? actions["Use"] : null;
         if (_useAction != null)
         {
+            // Use (with a carbine selected, while climbing) PLACES a carbine — or REPLACES the current
+            // one if already tethered (detach the old, place a fresh one, recompute the reachable set).
             _useAction.performed += OnUsePressed;
-            _useAction.canceled += OnUseReleased;
         }
         else
         {
             Debug.LogWarning("[CarbineController] No 'Use' action found — carbine placement disabled.");
+        }
+
+        if (_climb != null)
+        {
+            // Leaving the wall for good (release / reach-bottom / slide-slip fall / ragdoll / mantle
+            // top-out) auto-detaches the tether — a climb jump-off does NOT fire this, so a tethered
+            // jump keeps the rope MID-AIR. A clean FEET-DOWN landing after that jump (ClimbJumpLanded)
+            // detaches at that point. A "free" Cancel TAP while climbing (not consumed by a BracedReady
+            // cancel) detaches on demand.
+            _climb.ClimbReleased += OnClimbReleased;
+            _climb.CancelTapped += OnCancelTapped;
+            _climb.ClimbJumpLanded += OnClimbJumpLanded;
         }
     }
 
     private void OnDestroy()
     {
         if (_useAction != null)
-        {
             _useAction.performed -= OnUsePressed;
-            _useAction.canceled -= OnUseReleased;
+        if (_climb != null)
+        {
+            _climb.ClimbReleased -= OnClimbReleased;
+            _climb.CancelTapped -= OnCancelTapped;
+            _climb.ClimbJumpLanded -= OnClimbJumpLanded;
+            if (IsTethered) _climb.SetReachConstraint(null);
         }
-        if (_climb != null && IsTethered) _climb.SetReachConstraint(null);
+    }
+
+    /// <summary>The climber left the wall for good (or topped out) — drop the tether automatically. A
+    /// jump-off never reaches here (the dev wants a tethered jump to keep the rope for the yank stage).</summary>
+    private void OnClimbReleased()
+    {
+        if (IsTethered) DetachRope();
+    }
+
+    /// <summary>A "free" Cancel tap while climbing (one the controller didn't spend cancelling a
+    /// BracedReady peek) detaches the tether — the climber stays on the wall with full hold range back.</summary>
+    private void OnCancelTapped()
+    {
+        if (IsTethered) DetachRope();
+    }
+
+    /// <summary>A tethered jump-off ended with a clean feet-down landing — drop the rope at that point.
+    /// (A fall/ragdoll instead detaches via ClimbReleased; a mid-air reattach keeps the rope.)</summary>
+    private void OnClimbJumpLanded()
+    {
+        if (IsTethered) DetachRope();
     }
 
     private void Update()
     {
-        // Hold-to-detach: fires the moment the threshold passes (not on release), so the player
-        // gets immediate feedback and the release is inert afterwards.
-        if (_usePressed && !_detachConsumed && IsTethered &&
-            _climb != null && _climb.IsClimbing &&
-            Time.unscaledTime - _useDownTime >= holdDetachTime)
-        {
-            _detachConsumed = true;
-            DetachRope();
-        }
-
         // Progressive pay-out, metered by the PIVOT CHAIN (geometric, noise-free — see UpdatePivots),
         // NOT by the verlet's own arc: a slack verlet chain always carries a little residual stretch,
         // so "pay out when the arc exceeds the paid length" was a ratchet that unspooled the whole
@@ -157,7 +187,16 @@ public class CarbineController : MonoBehaviour
             Vector3 hip = HipPoint.position;
             UpdatePivots(hip);
 
-            float desired = Mathf.Min(PathLengthTo(hip) + paidSlack, _tether.RopeLength);
+            // Pay-out length = current extension + slack, but the slack TAPERS from paidSlack down to 0 as
+            // the extension nears the reach limit (RopeLength − ropeEndMargin — the same limit the hands are
+            // gated to), so the rope pulls taut right as the climber reaches the end of their range instead
+            // of hanging with a fixed +slack the reach gate never lets them close. Airborne (a tethered
+            // jump, extension past the reach limit) the slack is already 0, so the full rope pays out to
+            // RopeLength for the yank — hence the final RopeLength cap.
+            float ext = PathLengthTo(hip);
+            float reachLimit = Mathf.Max(0f, _tether.RopeLength - ropeEndMargin);
+            float slack = Mathf.Min(paidSlack, Mathf.Max(0f, reachLimit - ext));
+            float desired = Mathf.Min(ext + slack, _tether.RopeLength);
             float active = _tether.ActiveLength;
             if (desired > active) active = desired;   // pay out instantly — never fight movement/wraps
             else if (desired < active - reelHysteresis)
@@ -169,36 +208,96 @@ public class CarbineController : MonoBehaviour
 
     private void LateUpdate()
     {
-        // Range enforcement OFF the wall (tethered but not climbing — e.g. topped out and walking):
-        // hard-clamp the body to the rope sphere, after the motor moved (RopeController's pattern).
-        // While CLIMBING the cap is enforced upstream instead — hand steps past the range are refused
-        // (ClimbController reach constraint), so the climber never gets out here. Airborne overshoot
-        // (jump past rope's end) is the NEXT stage's yank — deliberately untouched.
-        if (!IsTethered || _motor == null) return;
-        if (_climb != null && _climb.IsClimbing) return;
-        if (!_motor.Controller.isGrounded) return;
+        // Range enforcement OFF the wall (tethered, not climbing): keep the body inside the rope's
+        // reach, after the motor moved (RopeController's pattern). Covers BOTH cases with one law:
+        //   • grounded/walking tethered — a soft leash;
+        //   • AIRBORNE after a tethered jump — the YANK: fly free while the rope has slack, then the
+        //     moment the body passes the rope's length it's caught (elastic, softened by yankGiveDistance)
+        //     and gravity turns the catch into a swing/hang.
+        // While CLIMBING the cap is enforced upstream instead (the reach gate refuses hand steps past
+        // the range), so the climber never reaches here.
+        if (!IsTethered || _motor == null) { EndYank(); return; }
+        if (_climb != null && _climb.IsClimbing) { EndYank(); return; }
 
-        // The clamp sphere sits at the LAST WRAP PIVOT with only the rope left past it as radius —
-        // wrapped around a corner, anchor-straight distance would let the player walk far beyond
-        // the rope; unwrapped, the last pivot IS the anchor and this is the plain rope sphere.
+        // The rope sphere sits at the LAST WRAP PIVOT with only the rope left past it as radius —
+        // wrapped around a corner, anchor-straight distance would let the body travel far beyond the
+        // rope; unwrapped, the last pivot IS the anchor and this is the plain rope sphere.
         Vector3 center = LastPivot;
         float maxLen = Mathf.Max(0.5f, _tether.RopeLength - _pivotBaseLen);
 
-        Vector3 offset = _motor.Transform.position - center;
-        if (offset.sqrMagnitude > maxLen * maxLen)
+        Vector3 pos = _motor.Transform.position;
+        Vector3 offset = pos - center;
+        float dist = offset.magnitude;
+        if (dist <= maxLen) { EndYank(); return; }   // within reach — no constraint, no yank
+
+        // Past the rope. SOFTENED GIVE: allow up to yankGiveDistance of extra stretch (hard cap), then
+        // reel that stretch back toward the true length at yankReturnSpeed — an elastic snatch that
+        // settles taut, not a dead wall. Only the RADIAL component is touched, so the tangential swing
+        // (the dangle) is left to gravity.
+        Vector3 dir = dist > 1e-4f ? offset / dist : Vector3.up;
+        float capped = Mathf.Min(dist, maxLen + Mathf.Max(0f, yankGiveDistance));
+        float settled = Mathf.MoveTowards(capped, maxLen, Mathf.Max(0f, yankReturnSpeed) * Time.deltaTime);
+        _motor.Controller.Move((center + dir * settled) - pos);
+
+        if (!_yanking)
         {
-            Vector3 clamped = center + offset * (maxLen / offset.magnitude);
-            _motor.Controller.Move(clamped - _motor.Transform.position);
+            _yanking = true;
+            if (logEvents) Debug.Log("[CarbineController] Rope YANK — caught at the rope's end.");
         }
+        _motor.SuppressAirControl(0.15f);   // re-armed each caught frame; clears shortly after release
+
+        // Bleed the motor's accumulated fall velocity while the rope bears the weight, so a later
+        // release doesn't inherit a runaway gravity build-up. Gentle, so the first swing still reads.
+        if (_motor.VerticalVelocity < 0f)
+            _motor.SetVerticalVelocity(
+                Mathf.MoveTowards(_motor.VerticalVelocity, 0f, Mathf.Max(0f, yankVelocityDamp) * Time.deltaTime));
     }
 
-    /// <summary>Reach constraint registered with the ClimbController while tethered: a hand may only
-    /// step to holds the rope can still reach — measured along the PIVOT CHAIN (arc to the last wrap
-    /// pivot + straight to the hold), so corner wraps meter correctly, minus the hip-below-hands margin.</summary>
-    private bool AllowHandTarget(Vector3 holdPos)
+    /// <summary>True while the airborne rope catch (yank) is actively holding the body. Read by the
+    /// dangle→reattach/rappel stage.</summary>
+    public bool IsYanking => _yanking;
+    private bool _yanking;
+
+    private void EndYank() => _yanking = false;
+
+    // ------------------------------------------------------------------ reachable-hold set (geodesic)
+    //
+    // While climbing, the rope's reach is measured NOT as straight-line distance but PROGRESSIVELY
+    // hold → neighbouring hold along the surface (a geodesic flood-fill from the carbine's own hold —
+    // HoldGeodesic / HoldSpatialGrid). The anchor (the carbine) and the rope length are both fixed for
+    // a placement, so the reachable set is computed ONCE here, cached, and the per-hand-step gate is
+    // then an O(1) lookup; it is recomputed only when the carbine is replaced. The pivot chain above
+    // still measures the physical 3D rope for the pay-out visual and the off-wall ground clamp.
+    private ClimbableSurface _carbineSurface;
+    private bool[] _reachable;
+
+    private void ComputeReachableSet()
+    {
+        _reachable = null;
+        _carbineSurface = _climb != null ? _climb.CurrentSurface : null;
+        if (_carbineSurface == null || !_carbineSurface.HoldsReady || _tether == null) return;
+
+        var holds = _carbineSurface.Holds;
+        float link = Mathf.Max(0.05f, _climb.MaxStepReach);   // "adjacent" = one hand-step apart
+        var grid = new HoldSpatialGrid(holds, _carbineSurface.transform, link);
+        int anchor = grid.NearestIndex(AnchorPoint);
+        float budget = Mathf.Max(0f, _tether.RopeLength - ropeEndMargin);
+
+        _reachable = new bool[holds.Count];
+        int reached = HoldGeodesic.ComputeReachable(grid, anchor, budget, link, _climb.FacingCoherence, _reachable);
+        if (logEvents)
+            Debug.Log($"[CarbineController] Reachable holds within {budget:0.0} m of rope along the surface: " +
+                      $"{reached}/{holds.Count} (link {link:0.00} m).");
+    }
+
+    /// <summary>Reach gate registered with the ClimbController while tethered: a hand may only step to
+    /// a hold inside the cached geodesic set (holds within the rope's along-surface reach from the
+    /// carbine). A different surface (climbed onto while tethered) is left unconstrained.</summary>
+    private bool AllowHandTargetIndex(ClimbableSurface surface, int holdIndex)
     {
         if (!IsTethered) return true;
-        return PathLengthTo(holdPos) <= _tether.RopeLength - ropeEndMargin;
+        if (surface != _carbineSurface || _reachable == null) return true;
+        return (uint)holdIndex < (uint)_reachable.Length && _reachable[holdIndex];
     }
 
     // ------------------------------------------------------------------ rope path measurement
@@ -282,19 +381,7 @@ public class CarbineController : MonoBehaviour
     private void OnUsePressed(InputAction.CallbackContext ctx)
     {
         if (_climb == null || !_climb.IsClimbing) return;   // carbine interactions are climb-only (this stage)
-        _usePressed = true;
-        _useDownTime = Time.unscaledTime;
-        _detachConsumed = false;
-    }
-
-    private void OnUseReleased(InputAction.CallbackContext ctx)
-    {
-        if (!_usePressed) return;
-        _usePressed = false;
-        if (_detachConsumed) return;                        // this press already detached
-        if (Time.unscaledTime - _useDownTime >= holdDetachTime) return;   // long hold without a tether — not a place
-        if (_climb == null || !_climb.IsClimbing) return;   // e.g. a rope handoff consumed the press mid-hold
-        TryPlaceCarbine();
+        TryPlaceCarbine();                                  // place, or replace when already tethered
     }
 
     // ------------------------------------------------------------------ placement
@@ -310,13 +397,6 @@ public class CarbineController : MonoBehaviour
         CarbineItem item = SelectedCarbineItem();
         if (item == null) return;   // carbine not selected — the press belongs to other systems
 
-        if (IsTethered)
-        {
-            // Multi-carbine (the rope threading through each placed carbine as a via point) is the
-            // NEXT stage — until then one tether at a time.
-            if (logEvents) Debug.Log("[CarbineController] Already tethered — multi-carbine routing arrives next stage.");
-            return;
-        }
         if (item.placedPrefab == null)
         {
             Debug.LogWarning("[CarbineController] CarbineItem has no placedPrefab assigned.");
@@ -325,8 +405,16 @@ public class CarbineController : MonoBehaviour
         if (!_climb.TryGetRightHandHold(out Vector3 holdPos, out Quaternion holdRot))
             return;   // hand not settled on a hold (slide/slip/jump/deferred attach) — no placement point
 
+        // Placing / REPLACING consumes one carbine. If the inventory is empty we do NOTHING — an
+        // already-placed tether is kept rather than silently lost (dev's "keep current rope" choice).
         if (_items == null || !_items.TryConsumeCurrent())
             return;
+
+        // Replace: with a carbine already out, drop the old rope first (it dissolves + destroys on its
+        // own), then place the fresh one below and recompute the reachable set for the new anchor. The
+        // carbine "climbs up" with the player as they re-place it higher.
+        bool replacing = IsTethered;
+        if (replacing) DetachRope();
 
         _carbine = Instantiate(item.placedPrefab,
                                holdPos + (holdRot * Vector3.forward) * carbineSurfaceOffset, holdRot);
@@ -342,11 +430,12 @@ public class CarbineController : MonoBehaviour
                      _carbine.transform, transform.root);
         ResetPivots();
         _tether.SetActiveLength(Vector3.Distance(AnchorPoint, HipPoint.position) + paidSlack);
-        _climb.SetReachConstraint(AllowHandTarget);   // no hand steps past the rope's range
+        ComputeReachableSet();                              // geodesic reachable holds for this placement
+        _climb.SetReachConstraint(AllowHandTargetIndex);   // no hand steps past the rope's range
 
         if (logEvents)
-            Debug.Log($"[CarbineController] Carbine placed at the right hand's hold ({item.ropeLength} m " +
-                      $"tether, {simulation}).", _carbine);
+            Debug.Log($"[CarbineController] Carbine {(replacing ? "REPLACED" : "placed")} at the right hand's " +
+                      $"hold ({item.ropeLength} m tether, {simulation}).", _carbine);
     }
 
     private static Transform ResolveRopePoint(Transform carbine, string childName)
@@ -396,6 +485,9 @@ public class CarbineController : MonoBehaviour
         _tether = null;
         _pivots.Clear();
         _pivotBaseLen = 0f;
+        _reachable = null;
+        _carbineSurface = null;
+        _yanking = false;
         _climb?.SetReachConstraint(null);   // full climbing range back
     }
 
@@ -438,38 +530,27 @@ public class CarbineController : MonoBehaviour
 
 #if UNITY_EDITOR
     // ------------------------------------------------------------------ range debug (showRangeDebug)
-    // Orange wire sphere = the live search boundary (centered on the LAST wrap pivot, radius = rope
-    // left past it); yellow lines = the pivot chain; cubes = current-surface holds near the boundary,
-    // green = still steppable / red = past the rope. Band-limited + stride-sampled — never judge
-    // completeness by cube density (dense bakes hold ~21k).
+    // Yellow lines = the pivot chain (the physical rope path used for pay-out + the off-wall clamp).
+    // Green cubes = the cached geodesic reachable-hold set (holds within the rope's along-surface reach
+    // from the carbine — the set a hand may still step to). Capped for dense bakes (~21k holds).
     private void OnDrawGizmos()
     {
         if (!showRangeDebug || !Application.isPlaying || !IsTethered) return;
 
-        float max = _tether.RopeLength - ropeEndMargin;
-        Vector3 pivot = LastPivot;
-        float remaining = Mathf.Max(0f, max - _pivotBaseLen);
-
-        Gizmos.color = new Color(1f, 0.6f, 0.1f);
-        Gizmos.DrawWireSphere(pivot, remaining);
         Gizmos.color = Color.yellow;
         for (int i = 0; i < _pivots.Count - 1; i++)
             Gizmos.DrawLine(_pivots[i], _pivots[i + 1]);
 
-        var surface = _climb != null ? _climb.CurrentSurface : null;
-        if (surface == null || !surface.HoldsReady) return;
-        var holds = surface.Holds;
-        Transform st = surface.transform;
-        int stride = Mathf.Max(1, holds.Count / 4000);
-        int drawn = 0;
-        for (int i = 0; i < holds.Count; i += stride)
+        if (_reachable == null || _carbineSurface == null || !_carbineSurface.HoldsReady) return;
+        var holds = _carbineSurface.Holds;
+        Transform st = _carbineSurface.transform;
+        Gizmos.color = new Color(0.2f, 1f, 0.4f);
+        int drawn = 0, count = Mathf.Min(holds.Count, _reachable.Length);
+        for (int i = 0; i < count; i++)
         {
-            Vector3 wp = st.TransformPoint(holds[i].LocalPosition);
-            float path = _pivotBaseLen + Vector3.Distance(pivot, wp);
-            if (Mathf.Abs(path - max) > rangeDebugBand) continue;
-            Gizmos.color = path <= max ? new Color(0.2f, 1f, 0.4f) : new Color(1f, 0.25f, 0.2f);
-            Gizmos.DrawCube(wp, Vector3.one * 0.06f);
-            if (++drawn >= 2500) break;
+            if (!_reachable[i]) continue;
+            Gizmos.DrawCube(st.TransformPoint(holds[i].LocalPosition), Vector3.one * 0.05f);
+            if (++drawn >= 8000) break;
         }
     }
 #endif
