@@ -84,11 +84,16 @@ namespace Game.PlayerV2.Systems
         private Rigidbody[] _bones = Array.Empty<Rigidbody>();
         private Collider[] _boneColliders = Array.Empty<Collider>();
         private Rigidbody _pelvisRb;
+        private float[] _boneDrag = Array.Empty<float>();      // authored damping, restored after a rope hang
+        private float[] _boneAngDrag = Array.Empty<float>();
 
         private float _ragdollTimer;
         private float _settleTimer;
         private bool _settled;
         private bool _groundTouched;   // latched on first pelvis ground contact — ends the air steering
+        private bool _pelvisGrounded;  // LIVE ground probe under the pelvis (read by rope-held ragdolls)
+        private bool _steerDisabled;   // this ragdoll runs without air steering (held by a rope — never lands)
+        private bool _recoverySuppressed;   // an external system owns the recovery input (rope tether)
         private Vector3 _camTargetLocalPos;
 
         // -- Hard-fall watch (apex-relative, armed only while the motor owns the body) --
@@ -101,6 +106,8 @@ namespace Game.PlayerV2.Systems
         private Vector3[] _blendPos = Array.Empty<Vector3>();
         private Quaternion[] _blendRot = Array.Empty<Quaternion>();
         private float _blendT;
+        private float _blendDuration;       // this recovery's blend length (handoffs can ask for a shorter one)
+        private bool _releaseOnBlendEnd;    // false on a handoff — the taking-over system keeps external control
 
         private static readonly int _hSpeed = Animator.StringToHash(Constants.ANIM_SPEED);
         private static readonly int _hMotionSpeed = Animator.StringToHash(Constants.ANIM_MOTION_SPEED);
@@ -111,8 +118,32 @@ namespace Game.PlayerV2.Systems
         // ── IRagdoll ─────────────────────────────────────────────────────────
         public bool IsRagdolled => _phase != Phase.Animated;
         public bool IsSettled => _settled;
-        public bool CanRecover => _phase == Phase.Ragdolled && _ragdollTimer >= minRagdollTime &&
+        public bool CanRecover => _phase == Phase.Ragdolled && !_recoverySuppressed &&
+                                  _ragdollTimer >= minRagdollTime &&
                                   (_settled || _ragdollTimer >= recoverAnywayAfter);
+        public Rigidbody PelvisBody => _pelvisRb;
+        public void SetRecoverySuppressed(bool suppressed) => _recoverySuppressed = suppressed;
+        public void SetAirSteerEnabled(bool enabled) => _steerDisabled = !enabled;
+        public bool IsPelvisGrounded => _pelvisGrounded;
+        public void ForceRecover() => Recover();   // Recover() already no-ops unless Phase.Ragdolled
+
+        public void SetBoneDamping(float linearDamping, float angularDamping)
+        {
+            for (int i = 0; i < _bones.Length; i++)
+            {
+                _bones[i].linearDamping = Mathf.Max(0f, linearDamping);
+                _bones[i].angularDamping = Mathf.Max(0f, angularDamping);
+            }
+        }
+
+        public void ResetBoneDamping()
+        {
+            for (int i = 0; i < _bones.Length; i++)
+            {
+                _bones[i].linearDamping = _boneDrag[i];
+                _bones[i].angularDamping = _boneAngDrag[i];
+            }
+        }
         public event Action RagdollStarting;
         public event Action RagdollRecovered;
 
@@ -158,6 +189,8 @@ namespace Game.PlayerV2.Systems
 
             _bones = new Rigidbody[n];
             _boneColliders = new Collider[n];
+            _boneDrag = new float[n];
+            _boneAngDrag = new float[n];
             int k = 0;
             for (int i = 0; i < found.Length; i++)
             {
@@ -166,6 +199,8 @@ namespace Game.PlayerV2.Systems
 
                 _bones[k] = rb;
                 _boneColliders[k] = rb.GetComponent<Collider>();
+                _boneDrag[k] = rb.linearDamping;         // the wizard's values — a rope hang borrows these slots
+                _boneAngDrag[k] = rb.angularDamping;
                 // Sleep the rig: kinematic + colliders off (zero cost in normal play, and no fights
                 // with the CharacterController capsule). Interpolate because the camera reads the
                 // pelvis transform in LateUpdate — raw physics steps would jitter it. Speculative CCD
@@ -256,7 +291,9 @@ namespace Game.PlayerV2.Systems
 
         public void TriggerRagdoll() => TriggerRagdoll(Vector3.zero);
 
-        public void TriggerRagdoll(Vector3 extraVelocity)
+        public void TriggerRagdoll(Vector3 extraVelocity) => TriggerRagdoll(extraVelocity, 1f, true);
+
+        public void TriggerRagdoll(Vector3 extraVelocity, float pelvisVelocityScale, bool allowAirSteer)
         {
             if (_phase != Phase.Animated || _bones.Length == 0 || !isActiveAndEnabled) return;
 
@@ -265,17 +302,22 @@ namespace Game.PlayerV2.Systems
             // each other's control flag.
             RagdollStarting?.Invoke();
             _controlLock?.RequestExternalControl();
+            ResetBoneDamping();   // a previous rope hang may have left its air drag on the rig
 
             CharacterController cc = _motor?.Controller;
             Vector3 carry = (cc != null && cc.enabled ? cc.velocity : Vector3.zero) + extraVelocity;
             if (cc != null) cc.enabled = false;                 // the capsule must not fight the bone colliders
             if (_animator != null) _animator.enabled = false;   // physics owns the pose now
 
+            // The fall/launch momentum carries into the bones. A HELD pelvis (rope yank) keeps only a
+            // fraction of it — the difference across the joints whips the limbs, spine and head forward
+            // past the hips the rope just arrested.
+            Vector3 pelvisCarry = carry * Mathf.Clamp01(pelvisVelocityScale);
             for (int i = 0; i < _bones.Length; i++)
             {
                 if (_boneColliders[i] != null) _boneColliders[i].enabled = true;
                 _bones[i].isKinematic = false;
-                _bones[i].linearVelocity = carry;               // the fall/launch momentum carries into the bones
+                _bones[i].linearVelocity = _bones[i] == _pelvisRb ? pelvisCarry : carry;
                 _bones[i].WakeUp();
             }
 
@@ -286,6 +328,8 @@ namespace Game.PlayerV2.Systems
             _settleTimer = 0f;
             _settled = false;
             _groundTouched = false;
+            _pelvisGrounded = false;
+            _steerDisabled = !allowAirSteer;
             _airborne = false;
             if (logRagdollEvents) Debug.Log("[PlayerRagdoll] Ragdoll started.");
         }
@@ -296,13 +340,6 @@ namespace Game.PlayerV2.Systems
         private void Recover()
         {
             if (_phase != Phase.Ragdolled) return;
-            _phase = Phase.Recovering;
-
-            for (int i = 0; i < _bones.Length; i++)
-            {
-                _bones[i].isKinematic = true;
-                if (_boneColliders[i] != null) _boneColliders[i].enabled = false;
-            }
 
             // Root target: the ground under the pelvis, yawed to where the body points.
             Vector3 pelvisPos = pelvis.position;
@@ -314,6 +351,38 @@ namespace Game.PlayerV2.Systems
             if (fwd.sqrMagnitude < 0.05f) fwd = Vector3.ProjectOnPlane(pelvis.up, Vector3.up);   // lying flat: hips forward ≈ vertical
             if (fwd.sqrMagnitude < 1e-4f) fwd = transform.forward;
             Quaternion rootRot = Quaternion.LookRotation(fwd.normalized, Vector3.up);
+
+            RecoverCore(rootPos, rootRot, blendToAnimationTime, parkAnimatorGrounded: true, releaseControl: true);
+        }
+
+        /// <summary>
+        /// Ends the ragdoll INTO another system's hands (the rope tether's Use-to-reattach): the body is
+        /// placed where the caller says instead of ground-snapped, the animator is NOT parked in grounded
+        /// idle (the taking-over system owns the pose), and external control is NOT released — the caller
+        /// keeps the body. The pose still blends out of the ragdoll over <paramref name="blendTime"/>, so
+        /// the crumpled shape morphs into whatever the new owner drives rather than popping.
+        /// Call the takeover (e.g. ClimbController.TryGrabAt) immediately after, in the same frame.
+        /// </summary>
+        public void RecoverInto(Vector3 rootPosition, Quaternion rootRotation, float blendTime)
+        {
+            if (_phase != Phase.Ragdolled) return;
+            RecoverCore(rootPosition, rootRotation,
+                        blendTime > 0f ? blendTime : blendToAnimationTime,
+                        parkAnimatorGrounded: false, releaseControl: false);
+        }
+
+        private void RecoverCore(Vector3 rootPos, Quaternion rootRot, float blendTime,
+                                 bool parkAnimatorGrounded, bool releaseControl)
+        {
+            _phase = Phase.Recovering;
+            _blendDuration = Mathf.Max(0.0001f, blendTime);
+            _releaseOnBlendEnd = releaseControl;
+
+            for (int i = 0; i < _bones.Length; i++)
+            {
+                _bones[i].isKinematic = true;
+                if (_boneColliders[i] != null) _boneColliders[i].enabled = false;
+            }
 
             // Teleport the root WITHOUT moving the visible pose: capture the skeleton's world pose,
             // move the root (bones ride along as children), write the world pose back.
@@ -340,16 +409,20 @@ namespace Game.PlayerV2.Systems
             }
             _blendT = 0f;
 
-            // Animator back on, parked in grounded idle so the blend has a sane destination
-            // (it was disabled mid-fall — without this it would resume the FreeFall pose).
+            // Animator back on. For a normal stand-up it is parked in grounded idle so the blend has a
+            // sane destination (it was disabled mid-fall — without this it resumes the FreeFall pose).
+            // On a handoff the taking-over system drives the pose, so parking it would fight them.
             if (_animator != null)
             {
                 _animator.enabled = true;
-                _animator.SetBool(_hGrounded, true);
-                _animator.SetBool(_hJump, false);
-                _animator.SetBool(_hFreeFall, false);
-                _animator.SetFloat(_hSpeed, 0f);
-                _animator.SetFloat(_hMotionSpeed, 0f);
+                if (parkAnimatorGrounded)
+                {
+                    _animator.SetBool(_hGrounded, true);
+                    _animator.SetBool(_hJump, false);
+                    _animator.SetBool(_hFreeFall, false);
+                    _animator.SetFloat(_hSpeed, 0f);
+                    _animator.SetFloat(_hMotionSpeed, 0f);
+                }
             }
 
             CharacterController cc = _motor?.Controller;
@@ -368,10 +441,20 @@ namespace Game.PlayerV2.Systems
         {
             if (_phase != Phase.Ragdolled || _pelvisRb == null) return;
 
+            // Air steering latch: ANY contact around the pelvis ends it for good (bounces included).
             if (!_groundTouched && Physics.CheckSphere(pelvis.position, groundTouchRadius, groundMask,
                                                        QueryTriggerInteraction.Ignore))
-                _groundTouched = true;   // down for good (stays latched through any bounce)
+                _groundTouched = true;
 
+            // "Resting on the ground" is a stricter, separate question — a rope-held body dangling
+            // against a WALL touches groundMask geometry all over and must not count as landed. So probe
+            // straight DOWN and require a surface that actually faces up.
+            _pelvisGrounded = Physics.Raycast(pelvis.position, Vector3.down, out RaycastHit rest,
+                                              groundTouchRadius + 0.15f, groundMask,
+                                              QueryTriggerInteraction.Ignore)
+                              && rest.normal.y > 0.5f;
+
+            if (_steerDisabled) return;   // rope-held ragdoll: passive swing, no input steering
             if (_groundTouched || airSteerAcceleration <= 0f || _inputHandler == null) return;
             Vector2 move = _inputHandler.MoveInput;
             if (move.sqrMagnitude < 0.01f) return;
@@ -404,7 +487,7 @@ namespace Game.PlayerV2.Systems
         /// captured ragdoll pose by the remaining weight (1 → 0), so the animator pose fades in.</summary>
         private void TickRecoverBlend(float dt)
         {
-            _blendT += dt / Mathf.Max(0.0001f, blendToAnimationTime);
+            _blendT += dt / Mathf.Max(0.0001f, _blendDuration);
             float w = 1f - Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(_blendT));
             if (w > 0f)
             {
@@ -420,9 +503,14 @@ namespace Game.PlayerV2.Systems
             if (_blendT >= 1f)
             {
                 _phase = Phase.Animated;
-                _controlLock?.ReleaseExternalControl();   // FSM resumes (Idle/Move/Jump by situation)
+                _recoverySuppressed = false;   // nobody owns the recovery input once control is back
+                // A handoff (RecoverInto) leaves control with the system that took the body — releasing
+                // here would drop the climber off the wall the moment the blend finished.
+                if (_releaseOnBlendEnd) _controlLock?.ReleaseExternalControl();   // FSM resumes (Idle/Move/Jump)
                 RagdollRecovered?.Invoke();
-                if (logRagdollEvents) Debug.Log("[PlayerRagdoll] Recovered — control returned.");
+                if (logRagdollEvents)
+                    Debug.Log(_releaseOnBlendEnd ? "[PlayerRagdoll] Recovered — control returned."
+                                                 : "[PlayerRagdoll] Recovered into another system's control.");
             }
         }
     }

@@ -1,0 +1,880 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 84ddd03e747f940459ba358a3825148e, type: 3}
+  m_Name: P_Cliff_I_MultiMat_Holds
+  m_EditorClassIdentifier: Game.Climbing::Game.Climbing.HoldDataSO
+  holds:
+  - LocalPosition: {x: -0.90611076, y: 5.429102, z: 0.33882713}
+    LocalRotation: {x: 0, y: -0.7401968, z: 0, w: 0.6723903}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.85710144, y: 5.4521985, z: -0.008384705}
+    LocalRotation: {x: 0, y: -0.72035736, z: 0, w: 0.6936031}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0090008, y: 5.3806124, z: 1.0677872}
+    LocalRotation: {x: 0, y: -0.3196044, z: 0, w: 0.9475511}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.60560226, y: 5.23918, z: 1.0682583}
+    LocalRotation: {x: 0, y: 0.08426631, z: 0, w: 0.9964433}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.24931335, y: 5.114264, z: 1.068676}
+    LocalRotation: {x: 0, y: 0.19980673, z: 0, w: 0.97983533}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.81121826, y: 5.4738226, z: -0.3334694}
+    LocalRotation: {x: 0, y: 0.9483435, z: 0, w: -0.3172453}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.46830368, y: 5.3403735, z: -0.34461975}
+    LocalRotation: {x: 0, y: 0.99596024, z: 0, w: 0.08979521}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.13789749, y: 5.211793, z: -0.35536766}
+    LocalRotation: {x: 0, y: 0.9692361, z: 0, w: 0.24613304}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.08187485, y: 4.9981484, z: 1.0690632}
+    LocalRotation: {x: 0, y: 0.08790864, z: 0, w: 0.99612856}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.37644768, y: 4.8948708, z: 1.0694084}
+    LocalRotation: {x: 0, y: 0.4159232, z: 0, w: 0.90939975}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.39715385, y: 4.9161386, z: 0.7066803}
+    LocalRotation: {x: 0, y: 0.6633599, z: 0, w: 0.7483006}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.4175949, y: 4.9371333, z: 0.3486004}
+    LocalRotation: {x: 0, y: 0.6772811, z: 0, w: 0.7357244}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.43807983, y: 4.958173, z: -0.010227203}
+    LocalRotation: {x: 0, y: 0.6689246, z: 0, w: 0.74333024}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.17407608, y: 5.0903864, z: -0.36551285}
+    LocalRotation: {x: 0, y: 0.9952208, z: 0, w: 0.09765042}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.458889, y: 4.9795475, z: -0.37477684}
+    LocalRotation: {x: 0, y: 0.8786557, z: 0, w: 0.47745603}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.75976944, y: 2.7393441, z: -0.6938591}
+    LocalRotation: {x: 0, y: 0.9184703, z: 0, w: 0.39549}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.6881275, y: 3.13783, z: -0.63324547}
+    LocalRotation: {x: 0, y: 0.9523093, z: 0, w: 0.30513442}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.66304207, y: 3.0716474, z: -0.21416283}
+    LocalRotation: {x: 0, y: 0.67420644, z: 0, w: 0.738543}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.63757896, y: 3.5439522, z: -0.57624817}
+    LocalRotation: {x: 0, y: 0.8673784, z: 0, w: 0.49764925}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.60829544, y: 3.4764018, z: -0.17034721}
+    LocalRotation: {x: 0, y: 0.6738582, z: 0, w: 0.73886067}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.576725, y: 3.4289782, z: 0.23212051}
+    LocalRotation: {x: 0, y: 0.6727723, z: 0, w: 0.7398496}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.5880699, y: 3.9417057, z: -0.5204277}
+    LocalRotation: {x: 0, y: 0.9207981, z: 0, w: 0.39003962}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.5592537, y: 3.8742945, z: -0.12618446}
+    LocalRotation: {x: 0, y: 0.6749804, z: 0, w: 0.7378357}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.514534, y: 4.2541037, z: -0.08182716}
+    LocalRotation: {x: 0, y: 0.67837197, z: 0, w: 0.7347186}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.54094315, y: 4.3203506, z: -0.46728897}
+    LocalRotation: {x: 0, y: 0.95732355, z: 0, w: 0.28901842}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.49733734, y: 4.6706605, z: -0.41812515}
+    LocalRotation: {x: 0, y: 0.86512864, z: 0, w: 0.5015501}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.53126335, y: 3.8269804, z: 0.2632637}
+    LocalRotation: {x: 0, y: 0.6792169, z: 0, w: 0.7339376}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.5046139, y: 3.8080506, z: 0.65452003}
+    LocalRotation: {x: 0, y: 0.68451464, z: 0, w: 0.7289992}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.47470474, y: 4.6142783, z: -0.04172516}
+    LocalRotation: {x: 0, y: 0.68250906, z: 0, w: 0.73087716}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.49183846, y: 4.21028, z: 0.29525948}
+    LocalRotation: {x: 0, y: 0.6821919, z: 0, w: 0.73117316}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.4538269, y: 4.580722, z: 0.3239975}
+    LocalRotation: {x: 0, y: 0.6833522, z: 0, w: 0.7300889}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.4318161, y: 4.5673046, z: 0.69026184}
+    LocalRotation: {x: 0, y: 0.6842261, z: 0, w: 0.72927}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.40787315, y: 4.5670104, z: 1.0633526}
+    LocalRotation: {x: 0, y: 0.36843893, z: 0, w: 0.929652}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.44377518, y: 4.192413, z: 1.0564423}
+    LocalRotation: {x: 0, y: 0.34879714, z: 0, w: 0.9371983}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.46863174, y: 4.1941757, z: 0.6723995}
+    LocalRotation: {x: 0, y: 0.683787, z: 0, w: 0.7296817}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.480999, y: 3.8040266, z: 1.0492706}
+    LocalRotation: {x: 0, y: 0.25327188, z: 0, w: 0.9673952}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.53388405, y: 3.4211037, z: 1.0452805}
+    LocalRotation: {x: 0, y: 0.34023443, z: 0, w: 0.94034064}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.5271778, y: 3.4128096, z: 0.6372261}
+    LocalRotation: {x: 0, y: 0.693529, z: 0, w: 0.72042876}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.6087551, y: 3.0261476, z: 1.0450268}
+    LocalRotation: {x: 0, y: 0.44249877, z: 0, w: 0.89676917}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.6012821, y: 3.0139408, z: 0.6240387}
+    LocalRotation: {x: 0, y: 0.69491506, z: 0, w: 0.7190919}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.6863632, y: 2.6167762, z: 1.0447674}
+    LocalRotation: {x: 0, y: 0.350661, z: 0, w: 0.93650246}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.63020515, y: 3.0250063, z: 0.2047329}
+    LocalRotation: {x: 0, y: 0.6807786, z: 0, w: 0.7324892}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.681797, y: 2.60104, z: 0.61050034}
+    LocalRotation: {x: 0, y: 0.69962645, z: 0, w: 0.71450883}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.76930046, y: 2.178431, z: 0.5967846}
+    LocalRotation: {x: 0, y: 0.7032442, z: 0, w: 0.7109484}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.7655525, y: 2.1990325, z: 1.0444984}
+    LocalRotation: {x: 0, y: 0.2524306, z: 0, w: 0.967615}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.84511757, y: 1.7793148, z: 1.0442333}
+    LocalRotation: {x: 0, y: 0.43760803, z: 0, w: 0.89916587}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.695549, y: 2.6077104, z: 0.17714691}
+    LocalRotation: {x: 0, y: 0.6849841, z: 0, w: 0.72855806}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.72792053, y: 2.6631749, z: -0.2612362}
+    LocalRotation: {x: 0, y: 0.669426, z: 0, w: 0.74287874}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.7770138, y: 2.1825929, z: 0.14459419}
+    LocalRotation: {x: 0, y: 0.6799953, z: 0, w: 0.73321646}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.8657379, y: 1.7512447, z: 0.1078949}
+    LocalRotation: {x: 0, y: 0.6782486, z: 0, w: 0.7348325}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.8552036, y: 1.7524229, z: 0.5849304}
+    LocalRotation: {x: 0, y: 0.70120585, z: 0, w: 0.7129589}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.9205437, y: 1.3649732, z: 1.0764008}
+    LocalRotation: {x: 0, y: 0.28960901, z: 0, w: 0.95714504}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.8199005, y: 2.2443027, z: -0.31337738}
+    LocalRotation: {x: 0, y: 0.6605094, z: 0, w: 0.75081784}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.8648548, y: 2.3259106, z: -0.76329994}
+    LocalRotation: {x: 0, y: 0.86213773, z: 0, w: 0.50667405}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.9387512, y: 1.3150697, z: 0.5876827}
+    LocalRotation: {x: 0, y: 0.6972373, z: 0, w: 0.7168404}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.99687004, y: 0.9342179, z: 1.131527}
+    LocalRotation: {x: 0, y: 0.50991046, z: 0, w: 0.86022747}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.9182682, y: 1.8134127, z: -0.36569214}
+    LocalRotation: {x: 0, y: 0.65407807, z: 0, w: 0.7564271}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.0161629, y: 1.3646398, z: -0.40496254}
+    LocalRotation: {x: 0, y: 0.66084677, z: 0, w: 0.7505208}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.9753475, y: 1.8912128, z: -0.83631134}
+    LocalRotation: {x: 0, y: 0.9168309, z: 0, w: 0.39927566}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.0662594, y: 1.4220811, z: -0.89042854}
+    LocalRotation: {x: 0, y: 0.9596196, z: 0, w: 0.28130114}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.144207, y: 0.95004535, z: -0.9330921}
+    LocalRotation: {x: 0, y: 0.92429787, z: 0, w: 0.38167188}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.9598446, y: 1.3143699, z: 0.088092804}
+    LocalRotation: {x: 0, y: 0.6783165, z: 0, w: 0.73476994}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.0188484, y: 0.88203305, z: 0.617218}
+    LocalRotation: {x: 0, y: 0.69250673, z: 0, w: 0.7214114}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.0470924, y: 0.86961395, z: 0.088285446}
+    LocalRotation: {x: 0, y: 0.67518073, z: 0, w: 0.7376524}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.136694, y: 0.43618745, z: 0.10072136}
+    LocalRotation: {x: 0, y: 0.68297446, z: 0, w: 0.7304423}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.1038322, y: 0.44147965, z: 0.6513252}
+    LocalRotation: {x: 0, y: 0.690845, z: 0, w: 0.72300285}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.0774632, y: 0.4793762, z: 1.1897354}
+    LocalRotation: {x: 0, y: 0.2791794, z: 0, w: 0.960239}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.1624069, y: -0.0000015785918, z: 1.2510853}
+    LocalRotation: {x: 0, y: 0.3561603, z: 0, w: 0.9344249}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.1976013, y: -0.0000016326085, z: 0.6749897}
+    LocalRotation: {x: 0, y: 0.6856224, z: 0, w: 0.72795737}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.2318249, y: -0.0000016847625, z: 0.1147995}
+    LocalRotation: {x: 0, y: 0.6852091, z: 0, w: 0.72834647}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.2660408, y: -0.0000017378479, z: -0.44530296}
+    LocalRotation: {x: 0, y: 0.6837936, z: 0, w: 0.72967553}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.0964756, y: 0.9025854, z: -0.43123627}
+    LocalRotation: {x: 0, y: 0.6705545, z: 0, w: 0.7418603}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.1747341, y: 0.44497404, z: -0.444952}
+    LocalRotation: {x: 0, y: 0.67626584, z: 0, w: 0.73665774}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.3010845, y: -0.0000017909333, z: -1.018959}
+    LocalRotation: {x: 0, y: 0.93106556, z: 0, w: 0.364852}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 1.2220573, y: 0.4785825, z: -0.9757023}
+    LocalRotation: {x: 0, y: 0.9292057, z: 0, w: 0.3695629}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0467281, y: 2.9918582, z: -0.31122398}
+    LocalRotation: {x: 0, y: -0.7670162, z: 0, w: 0.6416278}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.9679146, y: 3.074034, z: -0.7400379}
+    LocalRotation: {x: 0, y: 0.9710426, z: 0, w: -0.23890673}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.9731903, y: 2.6361976, z: -0.8413391}
+    LocalRotation: {x: 0, y: 0.91796124, z: 0, w: -0.39667013}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.9787998, y: 3.5155632, z: -0.62568474}
+    LocalRotation: {x: 0, y: 0.93299264, z: 0, w: -0.35989553}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0680237, y: 2.5491602, z: -0.39949036}
+    LocalRotation: {x: 0, y: -0.77156854, z: 0, w: 0.6361462}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1550941, y: 2.475428, z: 0.016029358}
+    LocalRotation: {x: 0, y: -0.76672447, z: 0, w: 0.64197636}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0016861, y: 2.1957839, z: -0.92577934}
+    LocalRotation: {x: 0, y: 0.96070355, z: 0, w: -0.27757657}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0966206, y: 2.0916374, z: -0.4876232}
+    LocalRotation: {x: 0, y: -0.7700195, z: 0, w: 0.63802046}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1232662, y: 1.6582229, z: -0.56306076}
+    LocalRotation: {x: 0, y: -0.75740117, z: 0, w: 0.65294987}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0303783, y: 1.7523406, z: -1.0108032}
+    LocalRotation: {x: 0, y: 0.965495, z: 0, w: -0.2604217}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0593281, y: 1.3049266, z: -1.0965881}
+    LocalRotation: {x: 0, y: 0.97845155, z: 0, w: -0.20647663}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1875858, y: 2.0146089, z: -0.030546188}
+    LocalRotation: {x: 0, y: -0.7566528, z: 0, w: 0.65381694}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.12603, y: 1.2246284, z: -0.5937176}
+    LocalRotation: {x: 0, y: -0.7407633, z: 0, w: 0.67176616}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0631008, y: 0.8517949, z: -1.165453}
+    LocalRotation: {x: 0, y: 0.88301367, z: 0, w: -0.46934724}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1879292, y: 1.5950761, z: -0.037231445}
+    LocalRotation: {x: 0, y: -0.7435203, z: 0, w: 0.6687134}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1701698, y: 1.2021164, z: -0.032129288}
+    LocalRotation: {x: 0, y: -0.739529, z: 0, w: 0.67312473}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1034832, y: 0.8099751, z: -0.59911156}
+    LocalRotation: {x: 0, y: -0.7364287, z: 0, w: 0.6765152}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2469406, y: 2.048854, z: 0.4641323}
+    LocalRotation: {x: 0, y: -0.7476186, z: 0, w: 0.6641283}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0850525, y: 0.40139514, z: -0.61000633}
+    LocalRotation: {x: 0, y: -0.73789096, z: 0, w: 0.67491996}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1421947, y: 0.40072277, z: -0.01876831}
+    LocalRotation: {x: 0, y: -0.74032104, z: 0, w: 0.6722535}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0356693, y: 0.42737263, z: -1.2081242}
+    LocalRotation: {x: 0, y: 0.97243744, z: 0, w: -0.23316388}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0080433, y: -0.0000018086284, z: -1.2510891}
+    LocalRotation: {x: 0, y: 0.94268227, z: 0, w: -0.33369172}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0695019, y: -0.000001761131, z: -0.62211037}
+    LocalRotation: {x: 0, y: -0.7405805, z: 0, w: 0.6719677}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1279087, y: -0.0000017164275, z: -0.024333954}
+    LocalRotation: {x: 0, y: -0.74069005, z: 0, w: 0.67184687}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1848507, y: -0.000001671724, z: 0.5584507}
+    LocalRotation: {x: 0, y: -0.7406908, z: 0, w: 0.67184603}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1561279, y: 0.8049417, z: -0.01930809}
+    LocalRotation: {x: 0, y: -0.7395288, z: 0, w: 0.67312497}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2113304, y: 0.81742615, z: 0.5426235}
+    LocalRotation: {x: 0, y: -0.7405281, z: 0, w: 0.6720254}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1985245, y: 0.4055713, z: 0.5560436}
+    LocalRotation: {x: 0, y: -0.74069065, z: 0, w: 0.6718463}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2423229, y: -0.0000016279519, z: 1.1466274}
+    LocalRotation: {x: 0, y: -0.40308717, z: 0, w: 0.9151616}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2531586, y: 0.4233702, z: 1.1089611}
+    LocalRotation: {x: 0, y: -0.49127045, z: 0, w: 0.87100714}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2638569, y: 0.8415221, z: 1.0717621}
+    LocalRotation: {x: 0, y: -0.24081811, z: 0, w: 0.97057027}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2744751, y: 1.256498, z: 1.0348434}
+    LocalRotation: {x: 0, y: -0.54488844, z: 0, w: 0.83850855}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2230968, y: 1.230568, z: 0.5176525}
+    LocalRotation: {x: 0, y: -0.73946804, z: 0, w: 0.6731917}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2353706, y: 1.6360863, z: 0.49262428}
+    LocalRotation: {x: 0, y: -0.7391346, z: 0, w: 0.67355776}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.28508, y: 1.6709627, z: 0.9979706}
+    LocalRotation: {x: 0, y: -0.23964278, z: 0, w: 0.97086114}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2955017, y: 2.078237, z: 0.9617367}
+    LocalRotation: {x: 0, y: -0.4077024, z: 0, w: 0.91311485}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.3009224, y: 2.4706397, z: 0.9609585}
+    LocalRotation: {x: 0, y: -0.5106213, z: 0, w: 0.8598057}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2390614, y: 2.4702358, z: 0.47553062}
+    LocalRotation: {x: 0, y: -0.7610505, z: 0, w: 0.64869267}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.3010693, y: 2.8907697, z: 1.001976}
+    LocalRotation: {x: 0, y: -0.42394614, z: 0, w: 0.90568745}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2136002, y: 2.9059145, z: 0.5345688}
+    LocalRotation: {x: 0, y: -0.7688103, z: 0, w: 0.639477}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1823235, y: 3.3600633, z: 0.6012268}
+    LocalRotation: {x: 0, y: -0.76076466, z: 0, w: 0.6490279}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.2481346, y: 3.3492167, z: 1.0293941}
+    LocalRotation: {x: 0, y: -0.3157071, z: 0, w: 0.9488567}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1881218, y: 3.8270562, z: 1.0563889}
+    LocalRotation: {x: 0, y: -0.51386195, z: 0, w: 0.8578729}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1299915, y: 2.9283836, z: 0.101119995}
+    LocalRotation: {x: 0, y: -0.7684678, z: 0, w: 0.63988847}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1122704, y: 3.392888, z: 0.19322968}
+    LocalRotation: {x: 0, y: -0.7644825, z: 0, w: 0.6446445}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0780659, y: 3.8658369, z: 0.27690887}
+    LocalRotation: {x: 0, y: -0.7487376, z: 0, w: 0.66286653}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1319771, y: 3.8428812, z: 0.6646004}
+    LocalRotation: {x: 0, y: -0.7521856, z: 0, w: 0.65895134}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.1254654, y: 4.3259306, z: 1.0845699}
+    LocalRotation: {x: 0, y: -0.4117741, z: 0, w: 0.911286}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0401859, y: 3.4458869, z: -0.21084404}
+    LocalRotation: {x: 0, y: -0.75605804, z: 0, w: 0.6545046}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0361729, y: 3.9049082, z: -0.115753174}
+    LocalRotation: {x: 0, y: -0.74605423, z: 0, w: 0.66588515}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0063038, y: 4.3812184, z: -0.048789978}
+    LocalRotation: {x: 0, y: -0.7423503, z: 0, w: 0.670012}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.9896717, y: 3.9565828, z: -0.51146317}
+    LocalRotation: {x: 0, y: 0.8939265, z: 0, w: -0.4482136}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.9631977, y: 4.4163413, z: -0.43003845}
+    LocalRotation: {x: 0, y: 0.97131395, z: 0, w: -0.2378007}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.8906059, y: 4.921452, z: -0.38391495}
+    LocalRotation: {x: 0, y: 0.889998, z: 0, w: -0.45596436}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0765553, y: 4.34571, z: 0.7078171}
+    LocalRotation: {x: 0, y: -0.74644715, z: 0, w: 0.66544473}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0268478, y: 4.866647, z: 0.7060261}
+    LocalRotation: {x: 0, y: -0.7445659, z: 0, w: 0.66754895}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0646095, y: 4.8465614, z: 1.0923328}
+    LocalRotation: {x: 0, y: -0.4083029, z: 0, w: 0.9128465}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -1.0387421, y: 4.3566194, z: 0.33008003}
+    LocalRotation: {x: 0, y: -0.73860496, z: 0, w: 0.6741386}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.9871769, y: 4.8772783, z: 0.33240318}
+    LocalRotation: {x: 0, y: -0.7434645, z: 0, w: 0.6687754}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.9402218, y: 4.8978, z: -0.024036407}
+    LocalRotation: {x: 0, y: -0.75052387, z: 0, w: 0.6608434}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.22294426, y: 3.507837, z: -0.57447433}
+    LocalRotation: {x: 0, y: 0.9999963, z: 0, w: 0.0027198035}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.26901436, y: 3.088665, z: -0.6513386}
+    LocalRotation: {x: 0, y: 0.9998369, z: 0, w: 0.018059222}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.14275742, y: 3.0570219, z: -0.68592834}
+    LocalRotation: {x: 0, y: 0.9995013, z: 0, w: 0.031578716}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.32686996, y: 2.6512938, z: -0.701231}
+    LocalRotation: {x: 0, y: 0.99989986, z: 0, w: 0.014154769}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.40662003, y: 2.2151165, z: -0.7614975}
+    LocalRotation: {x: 0, y: 0.99987924, z: 0, w: -0.01554192}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.10367966, y: 2.592595, z: -0.7268009}
+    LocalRotation: {x: 0, y: 0.99966836, z: 0, w: 0.025753302}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.53355026, y: 2.5960534, z: -0.7713165}
+    LocalRotation: {x: 0, y: 0.9976727, z: 0, w: 0.06818554}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.49362755, y: 1.7751247, z: -0.81884384}
+    LocalRotation: {x: 0, y: 0.9995801, z: 0, w: -0.028977666}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.05741501, y: 2.1322067, z: -0.7520485}
+    LocalRotation: {x: 0, y: 0.99897206, z: 0, w: 0.04533027}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.012514114, y: 1.6814104, z: -0.80589676}
+    LocalRotation: {x: 0, y: 0.9997821, z: 0, w: 0.020876145}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.52358055, y: 1.698424, z: -0.9027271}
+    LocalRotation: {x: 0, y: 0.99464357, z: 0, w: 0.1033647}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.57244873, y: 1.3346274, z: -0.86021996}
+    LocalRotation: {x: 0, y: 0.9997597, z: 0, w: -0.021922948}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.034212112, y: 1.2547636, z: -0.86982536}
+    LocalRotation: {x: 0, y: 0.99808353, z: 0, w: 0.061881084}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.6269722, y: 0.879677, z: -0.90005493}
+    LocalRotation: {x: 0, y: 0.99996156, z: 0, w: 0.008769181}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.52898216, y: 2.1384444, z: -0.82523346}
+    LocalRotation: {x: 0, y: 0.99541444, z: 0, w: 0.09565663}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.65541077, y: 0.4338943, z: -0.93839264}
+    LocalRotation: {x: 0, y: 0.99998814, z: 0, w: -0.0048772744}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.09065056, y: 0.4298458, z: -1.0101433}
+    LocalRotation: {x: 0, y: 0.9971294, z: 0, w: 0.0757167}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.67082024, y: -0.000001787208, z: -0.97002983}
+    LocalRotation: {x: 0, y: 0.99945617, z: 0, w: 0.0329764}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.10837364, y: -0.0000017946586, z: -1.0641441}
+    LocalRotation: {x: 0, y: 0.9965636, z: 0, w: 0.08283138}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.44750404, y: -0.0000018011779, z: -1.1572266}
+    LocalRotation: {x: 0, y: 0.9963563, z: 0, w: 0.085288845}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.06923866, y: 0.8489212, z: -0.9385071}
+    LocalRotation: {x: 0, y: 0.9977415, z: 0, w: 0.06717038}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.49996758, y: 0.852728, z: -1.0573158}
+    LocalRotation: {x: 0, y: 0.99522763, z: 0, w: 0.09758046}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.47477913, y: 0.43279386, z: -1.1129055}
+    LocalRotation: {x: 0, y: 0.99629706, z: 0, w: 0.08597787}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.5176754, y: 1.265221, z: -0.9834137}
+    LocalRotation: {x: 0, y: 0.9943471, z: 0, w: 0.106178544}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.55083656, y: 3.0557032, z: -0.7146492}
+    LocalRotation: {x: 0, y: 0.99940634, z: 0, w: 0.034452774}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.582592, y: 3.4931734, z: -0.60492325}
+    LocalRotation: {x: 0, y: 0.9996501, z: 0, w: 0.026450293}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.18377304, y: 3.48736, z: -0.58335114}
+    LocalRotation: {x: 0, y: 0.9998562, z: 0, w: 0.016960558}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.61240196, y: 3.9212785, z: -0.5042534}
+    LocalRotation: {x: 0, y: 0.99993396, z: 0, w: 0.011493734}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.22710228, y: 3.9026613, z: -0.50930023}
+    LocalRotation: {x: 0, y: 0.99999976, z: 0, w: 0.00068177894}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.61567307, y: 4.363157, z: -0.43865395}
+    LocalRotation: {x: 0, y: 0.9999911, z: 0, w: -0.0042124274}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.17819786, y: 3.9138954, z: -0.51544}
+    LocalRotation: {x: 0, y: 0.9999481, z: 0, w: -0.010189854}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.26062965, y: 4.3197913, z: -0.45033455}
+    LocalRotation: {x: 0, y: 0.99995464, z: 0, w: -0.009525372}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.23664284, y: 4.7625575, z: -0.398592}
+    LocalRotation: {x: 0, y: 0.9999962, z: 0, w: -0.002760109}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.57034683, y: 4.855813, z: -0.38926125}
+    LocalRotation: {x: 0, y: 0.99999994, z: 0, w: -0.0003489221}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.13204384, y: 4.305011, z: -0.46038628}
+    LocalRotation: {x: 0, y: 0.9999561, z: 0, w: -0.009373955}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.10887718, y: 4.679671, z: -0.4104061}
+    LocalRotation: {x: 0, y: 0.9999882, z: 0, w: -0.0048587346}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.33448982, y: 1.7090431, z: 1.0323792}
+    LocalRotation: {x: 0, y: -0.01070747, z: 0, w: 0.99994266}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.27075005, y: 2.12606, z: 1.0326576}
+    LocalRotation: {x: 0, y: -0.017841918, z: 0, w: 0.99984086}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.23938751, y: 2.0688865, z: 1.0038834}
+    LocalRotation: {x: 0, y: -0.018292775, z: 0, w: 0.9998327}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.20563316, y: 2.5410063, z: 1.0344124}
+    LocalRotation: {x: 0, y: -0.013866491, z: 0, w: 0.99990386}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.13811493, y: 2.9552095, z: 1.0351677}
+    LocalRotation: {x: 0, y: -0.009263783, z: 0, w: 0.9999571}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.28440857, y: 2.477245, z: 1.0226192}
+    LocalRotation: {x: 0, y: -0.015698733, z: 0, w: 0.9998768}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.7880707, y: 2.4629421, z: 0.9982319}
+    LocalRotation: {x: 0, y: -0.023168286, z: 0, w: 0.9997316}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.07993126, y: 3.3590434, z: 1.0387592}
+    LocalRotation: {x: 0, y: -0.003628917, z: 0, w: 0.99999344}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.3700943, y: 3.3176236, z: 1.0331745}
+    LocalRotation: {x: 0, y: -0.004475906, z: 0, w: 0.99999}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.332592, y: 2.8972552, z: 1.0253258}
+    LocalRotation: {x: 0, y: -0.012827234, z: 0, w: 0.99991775}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.049087524, y: 3.7714598, z: 1.0526772}
+    LocalRotation: {x: 0, y: 0.0029778949, z: 0, w: 0.9999956}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.8080368, y: 2.883804, z: 1.0152473}
+    LocalRotation: {x: 0, y: -0.010337452, z: 0, w: 0.9999466}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.029140472, y: 4.182869, z: 1.0655022}
+    LocalRotation: {x: 0, y: 0.008234759, z: 0, w: 0.9999661}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.37370872, y: 3.758876, z: 1.0531483}
+    LocalRotation: {x: 0, y: 0.0020084544, z: 0, w: 0.999998}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.7836132, y: 3.7816148, z: 1.0542831}
+    LocalRotation: {x: 0, y: -0.000021132118, z: 0, w: 1}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.8115883, y: 3.3191974, z: 1.030344}
+    LocalRotation: {x: 0, y: -0.0053679002, z: 0, w: 0.99998564}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.7647648, y: 2.0606775, z: 0.9800625}
+    LocalRotation: {x: 0, y: -0.019863518, z: 0, w: 0.9998027}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.36398697, y: 4.2038417, z: 1.0724468}
+    LocalRotation: {x: 0, y: 0.0054786527, z: 0, w: 0.999985}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.33938026, y: 4.665508, z: 1.0811024}
+    LocalRotation: {x: 0, y: 0.008513992, z: 0, w: 0.99996376}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.74357796, y: 4.2558827, z: 1.0786285}
+    LocalRotation: {x: 0, y: 0.0055497927, z: 0, w: 0.9999846}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.6984539, y: 4.7582226, z: 1.0883846}
+    LocalRotation: {x: 0, y: 0.008024209, z: 0, w: 0.9999678}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.023338318, y: 4.5952835, z: 1.0723629}
+    LocalRotation: {x: 0, y: 0.009751453, z: 0, w: 0.9999525}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.7353363, y: 1.6520702, z: 1.0216446}
+    LocalRotation: {x: 0, y: -0.016744187, z: 0, w: 0.9998598}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.18850136, y: 1.6557273, z: 1.0320396}
+    LocalRotation: {x: 0, y: -0.007458424, z: 0, w: 0.9999722}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.13415909, y: 1.2417997, z: 1.0813084}
+    LocalRotation: {x: 0, y: -0.012628508, z: 0, w: 0.99992025}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.7041321, y: 1.2417386, z: 1.0607758}
+    LocalRotation: {x: 0, y: -0.020150011, z: 0, w: 0.999797}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.67918015, y: 0.8366825, z: 1.0975819}
+    LocalRotation: {x: 0, y: -0.020951945, z: 0, w: 0.9997805}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.40242958, y: 1.2917621, z: 1.0819759}
+    LocalRotation: {x: 0, y: -0.0047244043, z: 0, w: 0.99998885}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.4760723, y: 0.85515064, z: 1.1368275}
+    LocalRotation: {x: 0, y: -0.00983781, z: 0, w: 0.9999516}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.66633415, y: 0.42554563, z: 1.1342602}
+    LocalRotation: {x: 0, y: -0.021701025, z: 0, w: 0.9997645}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.07418823, y: 0.42042688, z: 1.1604233}
+    LocalRotation: {x: 0, y: -0.02046232, z: 0, w: 0.99979067}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.65325356, y: -0.0000016158447, z: 1.1722164}
+    LocalRotation: {x: 0, y: -0.021702033, z: 0, w: 0.9997645}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.06555939, y: -0.0000016037375, z: 1.1977463}
+    LocalRotation: {x: 0, y: -0.021703076, z: 0, w: 0.9997645}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.53712463, y: -0.0000015916303, z: 1.2239227}
+    LocalRotation: {x: 0, y: -0.021340163, z: 0, w: 0.9997723}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.09041786, y: 0.82336485, z: 1.1238556}
+    LocalRotation: {x: 0, y: -0.017726565, z: 0, w: 0.9998429}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.522213, y: 0.41812634, z: 1.1852093}
+    LocalRotation: {x: 0, y: -0.016769141, z: 0, w: 0.9998594}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.0515728, y: -0.0000017499551, z: -0.48521805}
+    LocalRotation: {x: 0.7071067, y: 0.0000000022848485, z: 0.0000000022848488, w: 0.7071068}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.6527195, y: -0.0000017387792, z: -0.44929314}
+    LocalRotation: {x: 0.7071067, y: 0.000000002186215, z: 0.0000000021862152, w: 0.7071068}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.6267853, y: -0.0000016912818, z: 0.098581314}
+    LocalRotation: {x: 0.7071067, y: 0.000000004520519, z: 0.0000000045205195, w: 0.7071068}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.51732635, y: -0.0000017564744, z: -0.56154823}
+    LocalRotation: {x: 0.7071067, y: 2.535167e-10, z: 2.5351674e-10, w: 0.7071068}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.57000923, y: -0.0000017117709, z: 0.026737213}
+    LocalRotation: {x: 0.7071067, y: 0.0000000018998727, z: 0.000000001899873, w: 0.7071068}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.5835762, y: -0.0000016409904, z: 0.6565418}
+    LocalRotation: {x: 0.7071067, y: 0.0000000047482493, z: 0.00000000474825, w: 0.7071068}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.026397705, y: -0.0000016530976, z: 0.63534164}
+    LocalRotation: {x: 0.7071067, y: 0.0000000053899223, z: 0.0000000053899227, w: 0.7071068}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: -0.6162224, y: -0.0000016652048, z: 0.60359955}
+    LocalRotation: {x: 0.7071067, y: 0.000000004197525, z: 0.0000000041975254, w: 0.7071068}
+    RiskValue: 0
+    IconId: 0
+  - LocalPosition: {x: 0.011428833, y: -0.0000017024577, z: 0.07527733}
+    LocalRotation: {x: 0.7071067, y: 0.000000004200749, z: 0.000000004200749, w: 0.7071068}
+    RiskValue: 0
+    IconId: 0
+  surfaceType: 0

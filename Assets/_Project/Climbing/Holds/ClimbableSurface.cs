@@ -21,17 +21,8 @@ namespace Game.Climbing
                  "push holds at runtime (e.g. Flora trunks).")]
         [SerializeField] private HoldDataSO holdData;
 
-        [Header("Risk (slip roll — painted per instance, Free surfaces)")]
-        [Tooltip("Slip chance (0..1) rolled when a hand LEAVES a green-painted hold.")]
-        [SerializeField] private float greenRisk = 0.05f;
-        [Tooltip("Slip chance (0..1) rolled when a hand LEAVES a blue-painted hold.")]
-        [SerializeField] private float blueRisk = 0.25f;
-        [Tooltip("Slip chance (0..1) rolled when a hand LEAVES a red-painted hold.")]
-        [SerializeField] private float redRisk = 0.5f;
-        [Tooltip("Class an unpainted (black) hold resolves to at runtime. Black here counts as Green.")]
-        [SerializeField] private ClimbRiskClass blackFallback = ClimbRiskClass.Green;
-        [Tooltip("Overrides the global wet state — for indoor/sheltered surfaces (weather, later).")]
-        [SerializeField] private bool alwaysDry = false;
+        // Risk TUNING (per-class slip chance, black fallback, always-dry) is GLOBAL — see
+        // ClimbRiskSettings (Tools/Climbing/Risk Settings). Only the PAINT stays per instance.
 
         // LEGACY per-instance paint storage — superseded by the ClimbRiskPaint sibling component
         // (a big array field HERE explodes into one prefab-override entry per element on painted
@@ -61,11 +52,6 @@ namespace Game.Climbing
         private ClimbHoldSource _source = ClimbHoldSource.None;
 
         // -- Public read surface (consumed by the streamer / controller / bake) --
-        public bool AlwaysDry => alwaysDry;
-        public float RedRisk => redRisk;
-        public float GreenRisk => greenRisk;
-        public float BlueRisk => blueRisk;
-        public ClimbRiskClass BlackFallback => blackFallback;
         public float SearchRadius => searchRadius;
         public IReadOnlyList<ClimbHoldData> Holds => _holds;
         public bool HoldsReady => _holdsReady;
@@ -82,7 +68,8 @@ namespace Game.Climbing
 
         /// <summary>Painted risk class of a hold (index into <see cref="Holds"/>). Black when this
         /// instance is unpainted or the paint no longer matches the hold set (stale re-bake).
-        /// Reads the ClimbRiskPaint sibling component, falling back to the legacy field.</summary>
+        /// Reads the ClimbRiskPaint sibling component, falling back to the legacy field. Resolve
+        /// Black and turn a class into a chance through <see cref="ClimbRiskSettings"/>.</summary>
         public ClimbRiskClass RiskClassOf(int holdIndex)
         {
             byte[] arr = _paint != null ? _paint.Classes : holdRiskClasses;
@@ -91,22 +78,9 @@ namespace Game.Climbing
             return (ClimbRiskClass)arr[holdIndex];
         }
 
-        /// <summary>Slip chance (0..1) of a hold — Black resolved through <see cref="BlackFallback"/>.</summary>
-        public float Risk01(int holdIndex) => Risk01(RiskClassOf(holdIndex));
-
-        /// <summary>Slip chance (0..1) for a class; Black resolves through the fallback (Green when
-        /// the fallback itself was left on Black).</summary>
-        public float Risk01(ClimbRiskClass riskClass)
-        {
-            if (riskClass == ClimbRiskClass.Black)
-                riskClass = blackFallback == ClimbRiskClass.Black ? ClimbRiskClass.Green : blackFallback;
-            switch (riskClass)
-            {
-                case ClimbRiskClass.Blue: return blueRisk;
-                case ClimbRiskClass.Red: return redRisk;
-                default: return greenRisk;
-            }
-        }
+        /// <summary>Slip chance (0..1) of a hold: this instance's paint run through the GLOBAL
+        /// <see cref="ClimbRiskSettings"/> (which also resolves Black).</summary>
+        public float Risk01(int holdIndex) => ClimbRiskSettings.Instance.Risk01(RiskClassOf(holdIndex));
 
         /// <summary>
         /// The bake mesh the editor bake tool parses. Resolution order: explicit <see cref="bakeMeshFilter"/>

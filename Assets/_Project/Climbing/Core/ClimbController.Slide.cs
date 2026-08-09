@@ -164,7 +164,7 @@ namespace Game.Climbing
                 if (logClimbEvents) Debug.Log("[ClimbController] Slide reached the ground — stepping off.");
                 _motor?.SetVerticalVelocity(0f);
                 CleanupSlide();
-                FinishRelease();
+                FinishRelease(ClimbEndKind.Landed);
                 return;
             }
 
@@ -333,7 +333,7 @@ namespace Game.Climbing
             _motor?.SetVerticalVelocity(-Mathf.Max(_slideSpeed, 0f));
             _regrabCooldownTimer = regrabCooldown;   // don't instantly re-grab the surface just slid off
             CleanupSlide();
-            FinishRelease();
+            FinishRelease(ClimbEndKind.Fell);   // ran out of wall — a tether catches this
         }
 
         private void CleanupSlide()

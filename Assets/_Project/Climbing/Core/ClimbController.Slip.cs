@@ -59,7 +59,7 @@ namespace Game.Climbing
                 float d = (st.TransformPoint(holds[i].LocalPosition) - handPos).sqrMagnitude;
                 if (d < best) { best = d; idx = i; }
             }
-            return idx >= 0 ? s.Risk01(idx) : s.Risk01(ClimbRiskClass.Black);
+            return idx >= 0 ? s.Risk01(idx) : ClimbRiskSettings.Instance.Risk01(ClimbRiskClass.Black);
         }
 
         // ------------------------------------------------------------------ the slide + QTE
@@ -159,7 +159,7 @@ namespace Game.Climbing
                 if (logClimbEvents) Debug.Log("[ClimbController] Slip reached the ground — stepping off.");
                 _motor?.SetVerticalVelocity(0f);
                 StopSlideParticles();
-                FinishRelease();
+                FinishRelease(ClimbEndKind.Landed);
                 return;
             }
 
@@ -207,7 +207,8 @@ namespace Game.Climbing
             StopSlideParticles();
             _slipping = false;
             _motor?.SetVerticalVelocity(-slipSpeed);
-            FinishRelease();
+            FinishRelease(ClimbEndKind.Fell);   // the grip failed — a tether catches this
+
             _regrabCooldownTimer = slipReattachCooldown;   // after FinishRelease — nothing may shorten it
         }
 

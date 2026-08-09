@@ -524,8 +524,10 @@ namespace Game.Climbing
         /// (Cancel-hold / reach-bottom step-off), a slide or slip fall, a ragdoll takeover, or a completed
         /// mantle top-out — every path routes through FinishRelease. NOT raised on a climb jump-off (that
         /// keeps the body in the jump flow, never touching FinishRelease), so a tethered tool that must
-        /// persist through a jump can treat this as "the climber left the wall for good".</summary>
-        public event System.Action ClimbReleased;
+        /// persist through a jump can treat this as "the climber left the wall for good".
+        /// The <see cref="ClimbEndKind"/> says HOW it ended, because that is not all one thing to a
+        /// tethered tool: a rope should catch a FALL and let go of a climber who has arrived somewhere.</summary>
+        public event System.Action<ClimbEndKind> ClimbReleased;
 
         /// <summary>Raised on a "free" Cancel TAP while climbing — a tap the controller did NOT spend
         /// cancelling a BracedReady peek (that always takes the tap first) and that wasn't a hold-to-
@@ -939,7 +941,7 @@ namespace Game.Climbing
             if (!_isClimbing || _releasing || _mantling || _gettingUp || _climbJumping || _jumpAirborne || _sliding)
                 return false;
             _rig?.SetMasterWeight(0f);
-            FinishRelease();   // control released, layers zeroed, IK asleep — rappel re-enables its own IK
+            FinishRelease(ClimbEndKind.HandedOff);   // control released, layers zeroed, IK asleep — rappel re-enables its own IK
             return true;
         }
 
@@ -1087,6 +1089,25 @@ namespace Game.Climbing
         /// both hands to holds, fade FBBIK in) or — falling onto a FREE-type surface — enter the entry
         /// slide first, attaching only where the slide stops (ClimbController.Slide.cs owns that phase).
         /// </summary>
+        /// <summary>
+        /// Grabs a KNOWN hold on demand, for a system handing the body over (the rope tether's
+        /// Use-to-reattach out of a hanging ragdoll) rather than the player's own buffered Use press.
+        /// The caller is responsible for the body being animatable again first — see
+        /// PlayerRagdoll.RecoverInto, which must run in the same frame, before this.
+        /// Returns false if the climb can't be entered (already climbing, or the surface is gone).
+        /// </summary>
+        public bool TryGrabAt(ClimbableSurface surface, Vector3 holdPos, Quaternion holdRot)
+        {
+            if (_isClimbing || surface == null) return false;
+            _candidateSurface = surface;
+            _candidatePos = holdPos;
+            _candidateRot = holdRot;
+            _hasCandidate = false;      // consumed — don't leave a stale prompt target behind
+            _useBufferTimer = 0f;
+            Grab();
+            return _isClimbing;
+        }
+
         private void Grab()
         {
             if (_isClimbing || _controlLock == null || _rig == null || _candidateSurface == null) return;
@@ -1318,7 +1339,9 @@ namespace Game.Climbing
             if (logClimbEvents) Debug.Log("[ClimbController] Release (fading out).");
         }
 
-        private void FinishRelease()
+        /// <param name="kind">How the climb ended — passed straight to <see cref="ClimbReleased"/>.
+        /// Defaults to a deliberate release; fall/land/handoff paths say so explicitly.</param>
+        private void FinishRelease(ClimbEndKind kind = ClimbEndKind.Released)
         {
             _isClimbing = false;
             _releasing = false;
@@ -1358,7 +1381,7 @@ namespace Game.Climbing
             _controlLock?.ReleaseExternalControl();   // FSM hands control back to Jump/Move/Idle
             if (ik != null) ik.enabled = false;       // solver back to sleep until the next grab
             if (logClimbEvents) Debug.Log("[ClimbController] Released — control returned.");
-            ClimbReleased?.Invoke();                  // tethered tools (carbine) drop off the wall here
+            ClimbReleased?.Invoke(kind);              // tethered tools (carbine) decide by kind: a fall keeps the rope
         }
 
         /// <summary>The player is about to ragdoll (hard fall or an external trigger): tear down whatever
@@ -1375,7 +1398,7 @@ namespace Game.Climbing
                 _mantling = false;                   // FinishRelease doesn't clear the scripted-move flags
                 _gettingUp = false;
                 _rig?.SetMasterWeight(0f);
-                FinishRelease();                     // holds off, layers zeroed, control released, IK asleep
+                FinishRelease(ClimbEndKind.Fell);    // holds off, layers zeroed, control released, IK asleep
             }
         }
 
@@ -1489,7 +1512,7 @@ namespace Game.Climbing
         private void LoseGripToFall()
         {
             _motor?.SetVerticalVelocity(0f);
-            FinishRelease();
+            FinishRelease(ClimbEndKind.Fell);   // involuntary — a tether must catch this one
         }
 
     }

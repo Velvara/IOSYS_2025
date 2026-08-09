@@ -432,6 +432,33 @@ namespace Game.Climbing
             return true;
         }
 
+        /// <summary>
+        /// Ends the rappel immediately so another system can take the body over (a carbine tether whose
+        /// rope-alone hang has drifted within reach of climbable holds — the climber grabs the wall
+        /// instead of bracing into a wall rappel). Control is returned this frame; the taking-over system
+        /// must claim it in the same frame. Exits as <see cref="RappelExitKind.Detached"/> — from the rope
+        /// system's point of view the player has let go of the rope. False if no rappel is running.
+        /// </summary>
+        public bool ReleaseForHandoff()
+        {
+            if (_phase == Phase.Inactive) return false;
+            FinishRappel(RappelExitKind.Detached);
+            return true;
+        }
+
+        /// <summary>
+        /// Re-points the rope this rappel hangs from, mid-rappel. A placed anchor never moves, but a
+        /// carbine TETHER can: as the player descends, the rope wraps and unwraps over ledges, so its
+        /// effective anchor is the last wrap pivot and the usable length is what is left past it. The
+        /// hang line itself is untouched — this only feeds the rope-length limits.
+        /// </summary>
+        public void UpdateAnchor(Vector3 anchorPoint, float ropeLength)
+        {
+            if (_phase == Phase.Inactive) return;
+            _anchorPoint = anchorPoint;
+            _ropeLength = Mathf.Max(0.1f, ropeLength);
+        }
+
         private void Update()
         {
             if (_phase == Phase.Inactive) return;

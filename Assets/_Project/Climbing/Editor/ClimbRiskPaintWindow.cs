@@ -166,8 +166,12 @@ namespace Game.Climbing.Editor
             EditorGUILayout.Space();
             EditorGUILayout.HelpBox(
                 "LMB paints the holds under the brush (the ray needs the surface's colliders — the same " +
-                "ones climbing uses). Black holds resolve to the surface's Black Fallback class at runtime.",
+                "ones climbing uses). What each class COSTS, and what Black resolves to, are global — " +
+                "edit them in Tools/Climbing/Risk Settings.",
                 MessageType.None);
+
+            if (GUILayout.Button("Open Risk Settings (global)"))
+                EditorApplication.ExecuteMenuItem("Tools/Climbing/Risk Settings");
         }
 
         private void ClassButton(ClimbRiskClass riskClass, string label)

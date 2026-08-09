@@ -15042,6 +15042,19 @@ MonoBehaviour:
   yankGiveDistance: 0.3
   yankReturnSpeed: 4
   yankVelocityDamp: 6
+  yankRagdollSpeed: 6
+  yankPelvisVelocityScale: 0
+  yankWhipBoost: 2
+  yankJointSpring: 0
+  yankJointDamper: 0
+  hangAirDrag: 0.6
+  hangAngularDrag: 2
+  hangDampBelowSpeed: 1
+  hangDampRate: 3
+  hangSettleTimeout: 4
+  reattachReach: 1.2
+  reattachBlendTime: 0.3
+  reattachHeightOffset: 1.1
   showRangeDebug: 1
   dissolveProperty: dissolveTime
   dissolveDuration: 1.5
@@ -15135,6 +15148,10 @@ PrefabInstance:
     - target: {fileID: 2303455088509115020, guid: f21363048d51df04eae21492cfd63da9, type: 3}
       propertyPath: ClimbDrainRate
       value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 2725133469545428362, guid: f21363048d51df04eae21492cfd63da9, type: 3}
+      propertyPath: hardFallHeight
+      value: 20
       objectReference: {fileID: 0}
     - target: {fileID: 3473615447007885305, guid: f21363048d51df04eae21492cfd63da9, type: 3}
       propertyPath: cameraTransform

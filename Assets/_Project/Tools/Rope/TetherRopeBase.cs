@@ -58,4 +58,12 @@ public abstract class TetherRopeBase : MonoBehaviour
 
     /// <summary>Detach: the hip end lets go and the rope dangles from the carbine.</summary>
     public abstract void ReleaseHipEnd();
+
+    /// <summary>
+    /// Sets the ordered chain of player-side attachment points the rope's tail is pinned to, farthest
+    /// from the anchor LAST. Normally that is just the hip slot; while the player is climbing the rope
+    /// itself the rope is routed through the hands, then past the foot, then down to the hip — so it
+    /// reads as being held rather than tied to the waist. No effect once the end has been released.
+    /// </summary>
+    public abstract void SetEndChain(params Transform[] chain);
 }

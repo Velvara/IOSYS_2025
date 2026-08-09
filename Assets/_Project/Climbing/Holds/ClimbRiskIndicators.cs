@@ -17,62 +17,17 @@ namespace Game.Climbing
     /// (holds + opacity change as the player moves, and the quads must re-face the camera).
     ///
     /// Standalone by design (a visualisation concern, not part of the climb FSM) — drop it on the player
-    /// root next to <see cref="ClimbController"/> and assign the three images. Unpainted (Black) holds
-    /// resolve to the surface's Black-fallback class, matching the slip roll.
+    /// root next to <see cref="ClimbController"/>. It has NO inspector config of its own: every knob
+    /// (images, tints, range, size, falloff, caps, mask) and the Black-fallback class it resolves
+    /// unpainted holds through live on the global <see cref="ClimbRiskSettings"/> asset
+    /// (Tools/Climbing/Risk Settings), so the overlay is tuned next to the risk numbers it visualises.
     /// </summary>
     [DisallowMultipleComponent]
     public class ClimbRiskIndicators : MonoBehaviour
     {
-        [Header("Toggle")]
-        [Tooltip("Master switch. Indicators only ever show while actively climbing.")]
-        [SerializeField] private bool showIndicators = true;
-
-        [Header("Field")]
-        [Tooltip("Outer ring radius (m) around the player: holds within this show an indicator, holds " +
-                 "past it show nothing. Also the OverlapSphere radius used to find nearby surfaces.")]
-        [SerializeField] private float indicatorRange = 4f;
-        [Tooltip("World size (m) of each billboard image.")]
-        [SerializeField] private float indicatorSize = 0.12f;
-        [Tooltip("Push each billboard OUT along the hold's outward normal by this many metres, so it sits " +
-                 "off the surface instead of clipping into the mesh (raise until the images clear the rock).")]
-        [SerializeField] private float surfaceOffset = 0.05f;
-        [Tooltip("Height above the player root used as the ring CENTRE (≈ chest), so the field centres on " +
-                 "the body rather than the feet.")]
-        [SerializeField] private float centerHeightOffset = 1f;
-        [Tooltip("Opacity vs normalized distance from the player (x: 0 = at the player → 1 = at the ring; " +
-                 "y: image opacity). Default fades linearly 1 → 0; the per-class tint alpha scales the max.")]
-        [SerializeField] private AnimationCurve opacityFalloff = AnimationCurve.Linear(0f, 1f, 1f, 0f);
-
-        [Header("Risk Images (dev-supplied) + Tint")]
-        [Tooltip("Image for GREEN-risk holds. Leave null to draw nothing for this class.")]
-        [SerializeField] private Texture2D greenImage;
-        [SerializeField] private Color greenTint = Color.white;
-        [Tooltip("Image for BLUE-risk holds.")]
-        [SerializeField] private Texture2D blueImage;
-        [SerializeField] private Color blueTint = Color.white;
-        [Tooltip("Image for RED-risk holds.")]
-        [SerializeField] private Texture2D redImage;
-        [SerializeField] private Color redTint = Color.white;
-        [Tooltip("Draw UNPAINTED (Black) holds as their surface's Black-fallback class (matches the slip " +
-                 "roll). Off = only explicitly-painted holds show an image.")]
-        [SerializeField] private bool drawUnpainted = true;
-
-        [Header("Gather / Perf")]
-        [Tooltip("Layers searched for nearby climbable surfaces.")]
-        [SerializeField] private LayerMask climbableMask = ~0;
-        [Tooltip("Seconds between OverlapSphere refreshes of the nearby-surface set (surfaces don't move; " +
-                 "the per-hold gather + billboard build still run every frame).")]
-        [SerializeField] private float surfaceRefreshInterval = 0.25f;
-        [Tooltip("Hard cap on indicators drawn per frame (dense vertex bakes hold ~21k). Past this the " +
-                 "farthest-in-iteration holds are dropped — those near the ring are near-invisible anyway. " +
-                 "Warns once if hit so you can shrink the range.")]
-        [SerializeField] private int maxIndicators = 4000;
-        [Tooltip("Optional template material for the billboards (a transparent, unlit, vertex-colour × " +
-                 "texture shader). Leave null to build from the built-in \"Sprites/Default\".")]
-        [SerializeField] private Material billboardMaterialTemplate;
-
         private ClimbController _climb;
         private Transform _cam;
+        private ClimbRiskSettings _cfg;   // the one settings asset — held, so inspector edits apply live
 
         // Per risk-image class (0 = Green, 1 = Blue, 2 = Red): the class's mesh/material/texture/tint and
         // the reusable build buffers.
@@ -98,6 +53,7 @@ namespace Game.Climbing
         private void Awake()
         {
             _climb = GetComponentInParent<ClimbController>();
+            _cfg = ClimbRiskSettings.Instance;
             for (int i = 0; i < 3; i++)
             {
                 _v[i] = new List<Vector3>(256);
@@ -115,18 +71,19 @@ namespace Game.Climbing
 
         private void Update()
         {
-            if (!showIndicators || _climb == null || !_climb.IsClimbing) return;
+            if (_cfg == null) _cfg = ClimbRiskSettings.Instance;
+            if (!_cfg.ShowIndicators || _climb == null || !_climb.IsClimbing) return;
             if (_cam == null) { Camera c = Camera.main; if (c != null) _cam = c.transform; }
             if (_cam == null) return;
 
             EnsureMaterials();
 
-            Vector3 center = transform.position + Vector3.up * centerHeightOffset;
+            Vector3 center = transform.position + Vector3.up * _cfg.CenterHeightOffset;
             _refreshTimer -= Time.deltaTime;
             if (_refreshTimer <= 0f || _surfaces.Count == 0)
             {
                 RefreshSurfaces(center);
-                _refreshTimer = Mathf.Max(0.05f, surfaceRefreshInterval);
+                _refreshTimer = Mathf.Max(0.05f, _cfg.SurfaceRefreshInterval);
             }
 
             BuildAndDraw(center);
@@ -135,7 +92,7 @@ namespace Game.Climbing
         private void RefreshSurfaces(Vector3 center)
         {
             _surfaces.Clear();
-            int n = Physics.OverlapSphereNonAlloc(center, indicatorRange, _overlap, climbableMask,
+            int n = Physics.OverlapSphereNonAlloc(center, _cfg.IndicatorRange, _overlap, _cfg.ClimbableMask,
                                                   QueryTriggerInteraction.Ignore);
             for (int i = 0; i < n; i++)
             {
@@ -148,11 +105,17 @@ namespace Game.Climbing
         {
             for (int i = 0; i < 3; i++) { _v[i].Clear(); _c[i].Clear(); _uv[i].Clear(); _tri[i].Clear(); }
 
+            // Everything the hold loop needs, read ONCE out of the settings asset (property calls in a
+            // ~21k-iteration loop are pure overhead).
             Vector3 camPos = _cam.position;
-            Vector3 r = _cam.right * (indicatorSize * 0.5f);
-            Vector3 u = _cam.up * (indicatorSize * 0.5f);
-            float range = Mathf.Max(0.01f, indicatorRange);
+            Vector3 r = _cam.right * (_cfg.IndicatorSize * 0.5f);
+            Vector3 u = _cam.up * (_cfg.IndicatorSize * 0.5f);
+            float range = Mathf.Max(0.01f, _cfg.IndicatorRange);
             float r2 = range * range;
+            float offset = _cfg.SurfaceOffset;
+            bool drawUnpainted = _cfg.DrawUnpainted;
+            int maxIndicators = _cfg.MaxIndicators;
+            AnimationCurve opacityFalloff = _cfg.OpacityFalloff;
             int drawn = 0;
             bool capped = false;
 
@@ -176,13 +139,13 @@ namespace Game.Climbing
 
                     ClimbRiskClass raw = s.RiskClassOf(i);
                     if (raw == ClimbRiskClass.Black && !drawUnpainted) continue;
-                    int idx = ImageIndex(Resolve(s, raw));
+                    int idx = ImageIndex(_cfg.Resolve(raw));
                     if (idx < 0 || _tex[idx] == null || _mat[idx] == null) continue;   // no image for this class
 
                     float op = Mathf.Clamp01(opacityFalloff.Evaluate(Mathf.Sqrt(d2) / range));
                     Color t = _tint[idx];
                     Color32 col = new Color(t.r, t.g, t.b, t.a * op);
-                    AddQuad(idx, wp + normal * surfaceOffset, r, u, col);   // lift off the surface (anti-clip)
+                    AddQuad(idx, wp + normal * offset, r, u, col);   // lift off the surface (anti-clip)
 
                     if (++drawn >= maxIndicators)
                     {
@@ -191,7 +154,8 @@ namespace Game.Climbing
                         {
                             _warnedCap = true;
                             Debug.LogWarning($"[ClimbRiskIndicators] Hit maxIndicators ({maxIndicators}) — " +
-                                             "farther holds skipped this frame. Shrink Indicator Range or raise the cap.");
+                                             "farther holds skipped this frame. Shrink Indicator Range or raise " +
+                                             "the cap in Tools/Climbing/Risk Settings.");
                         }
                         break;
                     }
@@ -224,13 +188,6 @@ namespace Game.Climbing
             t.Add(b); t.Add(b + 2); t.Add(b + 3);
         }
 
-        /// <summary>Black resolves to the surface's fallback class (Green when the fallback is itself Black).</summary>
-        private static ClimbRiskClass Resolve(ClimbableSurface s, ClimbRiskClass cls)
-        {
-            if (cls != ClimbRiskClass.Black) return cls;
-            return s.BlackFallback == ClimbRiskClass.Black ? ClimbRiskClass.Green : s.BlackFallback;
-        }
-
         private static int ImageIndex(ClimbRiskClass cls)
         {
             switch (cls)
@@ -244,16 +201,16 @@ namespace Game.Climbing
 
         private void EnsureMaterials()
         {
-            _tex[0] = greenImage; _tex[1] = blueImage; _tex[2] = redImage;
-            _tint[0] = greenTint; _tint[1] = blueTint; _tint[2] = redTint;
+            _tex[0] = _cfg.GreenImage; _tex[1] = _cfg.BlueImage; _tex[2] = _cfg.RedImage;
+            _tint[0] = _cfg.GreenTint; _tint[1] = _cfg.BlueTint; _tint[2] = _cfg.RedTint;
 
             for (int i = 0; i < 3; i++)
             {
                 if (_tex[i] == null) continue;                       // no image → class stays undrawn
                 if (_mat[i] == null)
                 {
-                    Material m = billboardMaterialTemplate != null
-                        ? new Material(billboardMaterialTemplate)
+                    Material m = _cfg.BillboardMaterialTemplate != null
+                        ? new Material(_cfg.BillboardMaterialTemplate)
                         : NewDefaultMaterial();
                     if (m == null) continue;
                     m.hideFlags = HideFlags.HideAndDontSave;

@@ -135,6 +135,23 @@ public class PhysicsTetherRope : TetherRopeBase
         _hipBody = null;
     }
 
+    /// <summary>
+    /// PhysX variant: the joint chain has a single kinematic end body, so only the LAST link of the
+    /// chain is honoured — the rope ends at that point rather than being routed through the hands and
+    /// foot on the way. The verlet sim (the default) does the full routing; this is the A/B comparison
+    /// build, and re-plumbing its joint chain for intermediate pins isn't worth it for a visual detail.
+    /// </summary>
+    public override void SetEndChain(params Transform[] chain)
+    {
+        if (!HipAttached || chain == null) return;
+        for (int i = chain.Length - 1; i >= 0; i--)
+        {
+            if (chain[i] == null) continue;
+            _hipEnd = chain[i];   // the kinematic end body already chases this every FixedUpdate
+            return;
+        }
+    }
+
     private Rigidbody MakeKinematicEnd(string name, Vector3 position)
     {
         var go = new GameObject(name);

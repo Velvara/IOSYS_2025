@@ -32,6 +32,7 @@ public class VerletTetherRope : TetherRopeBase
     public float ropeRadius = 0.02f;
 
     private Transform _anchorEnd, _hipEnd;
+    private Transform[] _endChain;   // player-side pins, farthest from the anchor last (_hipEnd is its tail)
     private LayerMask _collisionMask;
     private Transform _ignoreA, _ignoreB;
     private Vector3[] _positions, _previous;
@@ -53,6 +54,7 @@ public class VerletTetherRope : TetherRopeBase
     {
         _anchorEnd = anchorEnd;
         _hipEnd = hipEnd;
+        _endChain = new[] { hipEnd };   // plain hip tether until the rope is routed through the hands
         RopeLength = Mathf.Max(0.5f, ropeLength);
         ActiveLength = RopeLength;   // the controller reels this in right after Init (progressive pay-out)
         _collisionMask = collisionMask;
@@ -121,6 +123,48 @@ public class VerletTetherRope : TetherRopeBase
     {
         HipAttached = false;
         _hipEnd = null;
+        _endChain = null;
+    }
+
+    public override void SetEndChain(params Transform[] chain)
+    {
+        if (!HipAttached || chain == null || chain.Length == 0) return;
+
+        // Keep only the real transforms, order preserved (the caller may pass unassigned slots).
+        int n = 0;
+        for (int i = 0; i < chain.Length; i++) if (chain[i] != null) n++;
+        if (n == 0) return;
+
+        // One particle per chain point, taken off the tail of the rope. The spans between them are short
+        // (hand → foot → hip), and every one of them is written outright each solver pass, so they simply
+        // read as straight rope between the slots — no rest length to fight over.
+        if (_positions != null) n = Mathf.Min(n, Mathf.Max(1, _positions.Length - 2));
+
+        _endChain = new Transform[n];
+        int k = 0;
+        for (int i = 0; i < chain.Length && k < n; i++)
+            if (chain[i] != null) _endChain[k++] = chain[i];
+
+        _hipEnd = _endChain[_endChain.Length - 1];   // the rope's true end is the last link in the chain
+    }
+
+    /// <summary>The transform particle <paramref name="i"/> is pinned to, or null if it is free. Particle 0
+    /// is the anchor; the last <c>_endChain.Length</c> particles are the player-side chain.</summary>
+    private Transform PinFor(int i)
+    {
+        if (i == 0) return _anchorEnd;
+        if (!HipAttached || _endChain == null || _positions == null) return null;
+        int first = _positions.Length - _endChain.Length;   // index of the chain's first particle
+        return i >= first ? _endChain[i - first] : null;
+    }
+
+    private void WritePins()
+    {
+        _positions[0] = _anchorEnd.position;
+        if (!HipAttached || _endChain == null) return;
+        int first = _positions.Length - _endChain.Length;
+        for (int i = 0; i < _endChain.Length; i++)
+            _positions[first + i] = _endChain[i].position;
     }
 
     private void LateUpdate()
@@ -137,19 +181,17 @@ public class VerletTetherRope : TetherRopeBase
     {
         int n = _positions.Length;
         Vector3 gravityStep = Physics.gravity * (gravityScale * dt * dt);
-        bool hipPinned = HipAttached && _hipEnd != null;
 
-        // Integrate the interior; the two pins are written outright each pass.
-        int last = n - 1;
+        // Integrate every FREE particle; the pinned ones (anchor + the player-side chain) are written
+        // outright each pass, so their integration would just be thrown away.
         for (int i = 1; i < n; i++)
         {
-            if (i == last && hipPinned) break;
+            if (PinFor(i) != null) continue;
             Vector3 current = _positions[i];
             _positions[i] += (current - _previous[i]) * damping + gravityStep;
             _previous[i] = current;
         }
-        _positions[0] = _anchorEnd.position;
-        if (hipPinned) _positions[last] = _hipEnd.position;
+        WritePins();
 
         float segmentRest = ActiveLength / (n - 1);
         System.Array.Clear(_touched, 0, _touched.Length);
@@ -164,31 +206,30 @@ public class VerletTetherRope : TetherRopeBase
                 float correction = (dist - segmentRest) / dist;
                 Vector3 offset = delta * correction;
 
-                bool pinA = i == 0;
-                bool pinB = i + 1 == last && hipPinned;
-                if (pinA && pinB) continue;
+                bool pinA = PinFor(i) != null;
+                bool pinB = PinFor(i + 1) != null;
+                if (pinA && pinB) continue;                  // both held — the span between them is what it is
                 if (pinA) _positions[i + 1] -= offset;
                 else if (pinB) _positions[i] += offset;
                 else { _positions[i] += offset * 0.5f; _positions[i + 1] -= offset * 0.5f; }
             }
-            _positions[0] = _anchorEnd.position;
-            if (hipPinned) _positions[last] = _hipEnd.position;
+            WritePins();
 
             // Pushout INTERLEAVED with the solve: a taut rope pulled around a corner is re-ejected
             // every few iterations, so the constraints can't drag it through the edge (the clipping).
-            if ((iter + 1) % passEvery == 0) CollisionPass(hipPinned, last);
+            if ((iter + 1) % passEvery == 0) CollisionPass();
         }
 
         // Final guarantee pass — combined with the constraints this is what makes slack rope wrap
         // around a rock between the two ends instead of cutting through.
-        CollisionPass(hipPinned, last);
+        CollisionPass();
     }
 
-    private void CollisionPass(bool hipPinned, int last)
+    private void CollisionPass()
     {
         for (int i = 1; i < _positions.Length; i++)
         {
-            if (i == last && hipPinned) continue;
+            if (PinFor(i) != null) continue;   // a held point goes where the body puts it, geometry or not
             PushOutOfColliders(i);
         }
     }

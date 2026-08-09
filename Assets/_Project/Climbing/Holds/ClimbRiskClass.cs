@@ -6,9 +6,9 @@ namespace Game.Climbing
     /// Slip-risk class of a single hold, painted in the editor (Tools/Climbing/Risk Painter) and
     /// stored OUTSIDE the mesh, per SCENE INSTANCE, on <see cref="ClimbableSurface"/> — the shared
     /// baked <see cref="HoldDataSO"/> never carries paint, so the same prefab scattered around a
-    /// level is painted per placement. Black = unpainted; at runtime it resolves through the
-    /// surface's Black Fallback class (default Green). The chance each class rolls lives on
-    /// <see cref="ClimbableSurface"/> (greenRisk/blueRisk/redRisk).
+    /// level is painted per placement. Black = unpainted; at runtime it resolves through the GLOBAL
+    /// Black Fallback class (default Green). The chance each class rolls is global too — both live
+    /// on <see cref="ClimbRiskSettings"/>, not per surface.
     /// </summary>
     public enum ClimbRiskClass : byte
     {

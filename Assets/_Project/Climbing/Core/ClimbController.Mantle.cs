@@ -239,7 +239,7 @@ namespace Game.Climbing
             }
             else
             {
-                FinishRelease();   // isClimbing=false, layer weights 0, ReleaseExternalControl
+                FinishRelease(ClimbEndKind.Landed);   // isClimbing=false, layer weights 0, ReleaseExternalControl
                 if (logClimbEvents) Debug.Log("[ClimbController] Mantle complete — standing on top.");
             }
         }
@@ -259,7 +259,7 @@ namespace Game.Climbing
             if (t >= 1f)
             {
                 _gettingUp = false;
-                FinishRelease();   // isClimbing=false, layer weights 0, ReleaseExternalControl
+                FinishRelease(ClimbEndKind.Landed);   // isClimbing=false, layer weights 0, ReleaseExternalControl
             }
         }
 
